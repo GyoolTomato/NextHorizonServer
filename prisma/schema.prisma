@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id           String            @id @default(cuid())
+  guestId      String            @unique
+  nickname     String            @default("NewUser")
+  level        Int               @default(1)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  characters   PlayerCharacter[]
+  items        PlayerItem[]
+  armors       PlayerArmor[]
+  weapons      PlayerWeapon[]
+  gachaHistory GachaHistory[]
+}
+
+model Character {
+  id              String            @id
+  name            String
+  nameKey         Int?
+  model           String?
+  rarity          Int
+  hp              Int?
+  hpLevel         Int?
+  atk             Int?
+  atkLevel        Int?
+  def             Int?
+  defLevel        Int?
+  avoid           Float?
+  avoidLevel      Float?
+  focus           Float?
+  focusLevel      Float?
+  atkspd          Int?
+  atkspdLevel     Int?
+  crirate         Float?
+  crirateLevel    Float?
+  cridmg          Float?
+  cridmgLevel     Float?
+  speed           Float?
+  activeSkill     Int?
+  passiveSkill0   Int?
+  passiveSkill1   Int?
+  createdAt       DateTime          @default(now())
+  ownedBy         PlayerCharacter[]
+  poolEntries     GachaPoolItem[]
+  histories       GachaHistory[]
+}
+
+model Item {
+  id      String       @id
+  type    String
+  nameKey Int
+  icon    String
+  ownedBy PlayerItem[]
+}
+
+model Armor {
+  id      String        @id
+  tier    Int
+  nameKey Int
+  icon    String
+  type    String
+  value   Int
+  ownedBy PlayerArmor[]
+}
+
+model Weapon {
+  id      String         @id
+  tier    Int
+  nameKey Int
+  icon    String
+  value   Int
+  ownedBy PlayerWeapon[]
+}
+
+model Mission {
+  id       String @id
+  titleKey Int
+  reward0  String?
+  reward1  String?
+  reward2  String?
+}
+
+model PlayerCharacter {
+  id          String    @id @default(cuid())
+  userId      String
+  characterId String
+  quantity    Int       @default(1)
+  acquiredAt  DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character   Character @relation(fields: [characterId], references: [id])
+
+  @@unique([userId, characterId])
+}
+
+model PlayerItem {
+  id        String   @id @default(cuid())
+  userId    String
+  itemId    String
+  quantity  Int      @default(0)
+  acquiredAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item      Item     @relation(fields: [itemId], references: [id])
+
+  @@unique([userId, itemId])
+}
+
+model PlayerArmor {
+  id        String   @id @default(cuid())
+  userId    String
+  armorId   String
+  quantity  Int      @default(0)
+  acquiredAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  armor     Armor    @relation(fields: [armorId], references: [id])
+
+  @@unique([userId, armorId])
+}
+
+model PlayerWeapon {
+  id        String   @id @default(cuid())
+  userId    String
+  weaponId  String
+  quantity  Int      @default(0)
+  acquiredAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weapon    Weapon   @relation(fields: [weaponId], references: [id])
+
+  @@unique([userId, weaponId])
+}
+
+model GachaBanner {
+  id          String          @id
+  name        String
+  costType    String          @default("1010002")
+  singleCost  Int             @default(100)
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  poolItems   GachaPoolItem[]
+  histories   GachaHistory[]
+}
+
+model GachaPoolItem {
+  id          String      @id @default(cuid())
+  bannerId    String
+  characterId String
+  weight      Int
+  banner      GachaBanner @relation(fields: [bannerId], references: [id], onDelete: Cascade)
+  character   Character   @relation(fields: [characterId], references: [id])
+
+  @@unique([bannerId, characterId])
+}
+
+model GachaHistory {
+  id          String      @id @default(cuid())
+  userId      String
+  bannerId    String
+  characterId String
+  pullCount   Int
+  costType    String
+  costAmount  Int
+  createdAt   DateTime    @default(now())
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  banner      GachaBanner @relation(fields: [bannerId], references: [id])
+  character   Character   @relation(fields: [characterId], references: [id])
+}
