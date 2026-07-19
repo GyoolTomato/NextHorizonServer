@@ -21,35 +21,35 @@ model User {
 }
 
 model Character {
-  id              String            @id
-  name            String
-  nameKey         Int?
-  model           String?
-  rarity          Int
-  hp              Int?
-  hpLevel         Int?
-  atk             Int?
-  atkLevel        Int?
-  def             Int?
-  defLevel        Int?
-  avoid           Float?
-  avoidLevel      Float?
-  focus           Float?
-  focusLevel      Float?
-  atkspd          Int?
-  atkspdLevel     Int?
-  crirate         Float?
-  crirateLevel    Float?
-  cridmg          Float?
-  cridmgLevel     Float?
-  speed           Float?
-  activeSkill     Int?
-  passiveSkill0   Int?
-  passiveSkill1   Int?
-  createdAt       DateTime          @default(now())
-  ownedBy         PlayerCharacter[]
-  poolEntries     GachaPoolItem[]
-  histories       GachaHistory[]
+  id            String            @id
+  name          String
+  nameKey       Int?
+  model         String?
+  rarity        Int
+  hp            Int?
+  hpLevel       Int?
+  atk           Int?
+  atkLevel      Int?
+  def           Int?
+  defLevel      Int?
+  avoid         Float?
+  avoidLevel    Float?
+  focus         Float?
+  focusLevel    Float?
+  atkspd        Int?
+  atkspdLevel   Int?
+  crirate       Float?
+  crirateLevel  Float?
+  cridmg        Float?
+  cridmgLevel   Float?
+  speed         Float?
+  activeSkill   Int?
+  passiveSkill0 Int?
+  passiveSkill1 Int?
+  createdAt     DateTime          @default(now())
+  ownedBy       PlayerCharacter[]
+  poolEntries   GachaPoolItem[]
+  histories     GachaHistory[]
 }
 
 model Item {
@@ -80,7 +80,7 @@ model Weapon {
 }
 
 model Mission {
-  id       String @id
+  id       String  @id
   titleKey Int
   reward0  String?
   reward1  String?
@@ -101,53 +101,53 @@ model PlayerCharacter {
 }
 
 model PlayerItem {
-  id        String   @id @default(cuid())
-  userId    String
-  itemId    String
-  quantity  Int      @default(0)
+  id         String   @id @default(cuid())
+  userId     String
+  itemId     String
+  quantity   Int      @default(0)
   acquiredAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  item      Item     @relation(fields: [itemId], references: [id])
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item       Item     @relation(fields: [itemId], references: [id])
 
   @@unique([userId, itemId])
 }
 
 model PlayerArmor {
-  id        String   @id @default(cuid())
-  userId    String
-  armorId   String
-  quantity  Int      @default(0)
+  id         String   @id @default(cuid())
+  userId     String
+  armorId    String
+  quantity   Int      @default(0)
   acquiredAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  armor     Armor    @relation(fields: [armorId], references: [id])
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  armor      Armor    @relation(fields: [armorId], references: [id])
 
   @@unique([userId, armorId])
 }
 
 model PlayerWeapon {
-  id        String   @id @default(cuid())
-  userId    String
-  weaponId  String
-  quantity  Int      @default(0)
+  id         String   @id @default(cuid())
+  userId     String
+  weaponId   String
+  quantity   Int      @default(0)
   acquiredAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  weapon    Weapon   @relation(fields: [weaponId], references: [id])
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weapon     Weapon   @relation(fields: [weaponId], references: [id])
 
   @@unique([userId, weaponId])
 }
 
 model GachaBanner {
-  id          String          @id
-  name        String
-  costType    String          @default("1010002")
-  singleCost  Int             @default(100)
-  isActive    Boolean         @default(true)
-  createdAt   DateTime        @default(now())
-  poolItems   GachaPoolItem[]
-  histories   GachaHistory[]
+  id         String          @id
+  name       String
+  costType   String          @default("1010002")
+  singleCost Int             @default(100)
+  isActive   Boolean         @default(true)
+  createdAt  DateTime        @default(now())
+  poolItems  GachaPoolItem[]
+  histories  GachaHistory[]
 }
 
 model GachaPoolItem {

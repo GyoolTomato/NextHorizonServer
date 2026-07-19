@@ -1,7 +1,3 @@
-node_modules
-dev.db
-dev.db-journal
-# Keep environment variables out of version control
+node_modules/
 .env
-
-/generated/prisma
+*.log
