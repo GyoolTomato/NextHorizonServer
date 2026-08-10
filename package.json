@@ -6,6 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "db:migrate-user-ids": "node prisma/migrate-user-ids.js",
     "prisma:generate": "prisma generate",
     "prisma:studio": "prisma studio"
   },

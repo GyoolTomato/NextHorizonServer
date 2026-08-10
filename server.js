@@ -19,7 +19,8 @@ app.use(express.json());
 function toUserDto(user) {
   return {
     id: user.id,
-    guestId: user.guestId,
+    localId: user.localId,
+    firebaseUid: user.firebaseUid,
     nickname: user.nickname,
     level: user.level,
   };
@@ -34,18 +35,38 @@ app.get("/health", async (req, res, next) => {
   }
 });
 
-// Unity prototype compatibility: Firebase UID is stored as guestId.
+// localId is the stable login identifier. Firebase UID is an optional link
+// used by Firebase-backed services and is not the database primary key.
 app.get("/user", async (req, res, next) => {
   try {
-    const uid = String(req.query.uid || "").trim();
-    if (!uid) {
-      return res.status(400).json({ error: "uid required" });
+    const localId = String(req.query.localId || "").trim();
+    const firebaseUid = String(req.query.firebaseUid || "").trim() || null;
+    if (!localId) {
+      return res.status(400).json({ error: "localId required" });
     }
 
-    const user = await prisma.user.upsert({
-      where: { guestId: uid },
-      update: {},
-      create: { guestId: uid },
+    const user = await prisma.$transaction(async (tx) => {
+      const localUser = await tx.user.findUnique({ where: { localId } });
+      if (localUser) {
+        return tx.user.update({
+          where: { id: localUser.id },
+          data: firebaseUid ? { firebaseUid } : {},
+        });
+      }
+
+      // First login after migrating from guestId: retain the existing account
+      // and its game data, then make localId the stable login identifier.
+      if (firebaseUid) {
+        const firebaseUser = await tx.user.findUnique({ where: { firebaseUid } });
+        if (firebaseUser) {
+          return tx.user.update({
+            where: { id: firebaseUser.id },
+            data: { localId },
+          });
+        }
+      }
+
+      return tx.user.create({ data: { localId, firebaseUid } });
     });
 
     return res.json(toUserDto(user));

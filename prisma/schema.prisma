@@ -7,8 +7,9 @@ datasource db {
 }
 
 model User {
-  id           String            @id @default(cuid())
-  guestId      String            @unique
+  id           Int               @id @default(autoincrement())
+  localId      String            @unique
+  firebaseUid  String?           @unique
   nickname     String            @default("NewUser")
   level        Int               @default(1)
   createdAt    DateTime          @default(now())
@@ -89,7 +90,7 @@ model Mission {
 
 model PlayerCharacter {
   id          String    @id @default(cuid())
-  userId      String
+  userId      Int
   characterId String
   quantity    Int       @default(1)
   acquiredAt  DateTime  @default(now())
@@ -102,7 +103,7 @@ model PlayerCharacter {
 
 model PlayerItem {
   id         String   @id @default(cuid())
-  userId     String
+  userId     Int
   itemId     String
   quantity   Int      @default(0)
   acquiredAt DateTime @default(now())
@@ -115,7 +116,7 @@ model PlayerItem {
 
 model PlayerArmor {
   id         String   @id @default(cuid())
-  userId     String
+  userId     Int
   armorId    String
   quantity   Int      @default(0)
   acquiredAt DateTime @default(now())
@@ -128,7 +129,7 @@ model PlayerArmor {
 
 model PlayerWeapon {
   id         String   @id @default(cuid())
-  userId     String
+  userId     Int
   weaponId   String
   quantity   Int      @default(0)
   acquiredAt DateTime @default(now())
@@ -163,7 +164,7 @@ model GachaPoolItem {
 
 model GachaHistory {
   id          String      @id @default(cuid())
-  userId      String
+  userId      Int
   bannerId    String
   characterId String
   pullCount   Int
