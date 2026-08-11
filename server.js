@@ -26,6 +26,21 @@ function toUserDto(user) {
   };
 }
 
+function parseUserRequest(req) {
+  return {
+    localId: String(req.body?.localId || "").trim(),
+    firebaseUid: String(req.body?.firebaseUid || "").trim() || null,
+  };
+}
+
+function validateNickname(value) {
+  const nickname = String(value || "").trim();
+  if (nickname.length < 2 || nickname.length > 16) {
+    return { error: "nickname must be between 2 and 16 characters" };
+  }
+  return { nickname };
+}
+
 app.get("/health", async (req, res, next) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -35,12 +50,10 @@ app.get("/health", async (req, res, next) => {
   }
 });
 
-// localId is the stable login identifier. Firebase UID is an optional link
-// used by Firebase-backed services and is not the database primary key.
-app.get("/user", async (req, res, next) => {
+// New API: checks whether a local account exists without creating NewUser.
+app.post("/api/user/login", async (req, res, next) => {
   try {
-    const localId = String(req.query.localId || "").trim();
-    const firebaseUid = String(req.query.firebaseUid || "").trim() || null;
+    const { localId, firebaseUid } = parseUserRequest(req);
     if (!localId) {
       return res.status(400).json({ error: "localId required" });
     }
@@ -48,41 +61,73 @@ app.get("/user", async (req, res, next) => {
     const user = await prisma.$transaction(async (tx) => {
       const localUser = await tx.user.findUnique({ where: { localId } });
       if (localUser) {
-        return tx.user.update({
-          where: { id: localUser.id },
-          data: firebaseUid ? { firebaseUid } : {},
-        });
+        return firebaseUid
+          ? tx.user.update({ where: { id: localUser.id }, data: { firebaseUid } })
+          : localUser;
       }
 
-      // First login after migrating from guestId: retain the existing account
-      // and its game data, then make localId the stable login identifier.
-      if (firebaseUid) {
-        const firebaseUser = await tx.user.findUnique({ where: { firebaseUid } });
-        if (firebaseUser) {
-          return tx.user.update({
-            where: { id: firebaseUser.id },
-            data: { localId },
-          });
-        }
-      }
+      if (!firebaseUid) return null;
 
-      return tx.user.create({ data: { localId, firebaseUid } });
+      const firebaseUser = await tx.user.findUnique({ where: { firebaseUid } });
+      return firebaseUser
+        ? tx.user.update({ where: { id: firebaseUser.id }, data: { localId } })
+        : null;
     });
 
-    return res.json(toUserDto(user));
+    return res.json({ isNew: !user, user: user ? toUserDto(user) : null });
   } catch (error) {
     return next(error);
   }
 });
 
-// Lightweight endpoint for checking that the attached catalog is readable.
-app.get("/catalog", async (req, res, next) => {
+app.post("/api/user", async (req, res, next) => {
   try {
-    const [items, characters] = await Promise.all([
-      prisma.item.findMany({ orderBy: { id: "asc" } }),
-      prisma.character.findMany({ orderBy: { id: "asc" } }),
-    ]);
-    return res.json({ items, characters });
+    const { localId, firebaseUid } = parseUserRequest(req);
+    if (!localId) {
+      return res.status(400).json({ error: "localId required" });
+    }
+
+    const nicknameResult = validateNickname(req.body?.nickname);
+    if (nicknameResult.error) {
+      return res.status(400).json({ error: nicknameResult.error });
+    }
+
+    const existingUser = await prisma.user.findUnique({ where: { localId } });
+    if (existingUser) {
+      return res.status(409).json({ error: "localId already exists" });
+    }
+
+    const user = await prisma.user.create({
+      data: { localId, firebaseUid, nickname: nicknameResult.nickname },
+    });
+    return res.status(201).json(toUserDto(user));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch("/api/user/nickname", async (req, res, next) => {
+  try {
+    const localId = String(req.body?.localId || "").trim();
+    if (!localId) {
+      return res.status(400).json({ error: "localId required" });
+    }
+
+    const nicknameResult = validateNickname(req.body?.nickname);
+    if (nicknameResult.error) {
+      return res.status(400).json({ error: nicknameResult.error });
+    }
+
+    const existingUser = await prisma.user.findUnique({ where: { localId } });
+    if (!existingUser) {
+      return res.status(404).json({ error: "user not found" });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: { nickname: nicknameResult.nickname },
+    });
+    return res.json(toUserDto(user));
   } catch (error) {
     return next(error);
   }
@@ -98,12 +143,9 @@ app.use((error, req, res, next) => {
 });
 
 async function start() {
-  const [itemCount, userCount] = await Promise.all([
-    prisma.item.count(),
-    prisma.user.count(),
-  ]);
+  const userCount = await prisma.user.count();
 
-  console.log(`database ready: ${itemCount} items, ${userCount} users`);
+  console.log(`database ready: ${userCount} users`);
   app.listen(port, "0.0.0.0", () => {
     console.log(`server running on port ${port}`);
   });

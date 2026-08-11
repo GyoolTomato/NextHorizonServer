@@ -21,65 +21,6 @@ model User {
   gachaHistory GachaHistory[]
 }
 
-model Character {
-  id            String            @id
-  name          String
-  nameKey       Int?
-  model         String?
-  rarity        Int
-  hp            Int?
-  hpLevel       Int?
-  atk           Int?
-  atkLevel      Int?
-  def           Int?
-  defLevel      Int?
-  avoid         Float?
-  avoidLevel    Float?
-  focus         Float?
-  focusLevel    Float?
-  atkspd        Int?
-  atkspdLevel   Int?
-  crirate       Float?
-  crirateLevel  Float?
-  cridmg        Float?
-  cridmgLevel   Float?
-  speed         Float?
-  activeSkill   Int?
-  passiveSkill0 Int?
-  passiveSkill1 Int?
-  createdAt     DateTime          @default(now())
-  ownedBy       PlayerCharacter[]
-  poolEntries   GachaPoolItem[]
-  histories     GachaHistory[]
-}
-
-model Item {
-  id      String       @id
-  type    String
-  nameKey Int
-  icon    String
-  ownedBy PlayerItem[]
-}
-
-model Armor {
-  id      String        @id
-  tier    Int
-  nameKey Int
-  icon    String
-  type    String
-  value   Int
-  ownedBy PlayerArmor[]
-}
-
-model Weapon {
-  id      String         @id
-  tier    Int
-  nameKey Int
-  icon    String
-  value   Int
-  ownedBy PlayerWeapon[]
-}
-
 model Mission {
   id       String  @id
   titleKey Int
@@ -89,14 +30,13 @@ model Mission {
 }
 
 model PlayerCharacter {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   userId      Int
   characterId String
-  quantity    Int       @default(1)
-  acquiredAt  DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  character   Character @relation(fields: [characterId], references: [id])
+  quantity    Int      @default(1)
+  acquiredAt  DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, characterId])
 }
@@ -109,7 +49,6 @@ model PlayerItem {
   acquiredAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  item       Item     @relation(fields: [itemId], references: [id])
 
   @@unique([userId, itemId])
 }
@@ -122,7 +61,6 @@ model PlayerArmor {
   acquiredAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  armor      Armor    @relation(fields: [armorId], references: [id])
 
   @@unique([userId, armorId])
 }
@@ -135,7 +73,6 @@ model PlayerWeapon {
   acquiredAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  weapon     Weapon   @relation(fields: [weaponId], references: [id])
 
   @@unique([userId, weaponId])
 }
@@ -157,7 +94,6 @@ model GachaPoolItem {
   characterId String
   weight      Int
   banner      GachaBanner @relation(fields: [bannerId], references: [id], onDelete: Cascade)
-  character   Character   @relation(fields: [characterId], references: [id])
 
   @@unique([bannerId, characterId])
 }
@@ -173,5 +109,4 @@ model GachaHistory {
   createdAt   DateTime    @default(now())
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   banner      GachaBanner @relation(fields: [bannerId], references: [id])
-  character   Character   @relation(fields: [characterId], references: [id])
 }
