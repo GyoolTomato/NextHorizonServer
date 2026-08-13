@@ -67,20 +67,20 @@ function parseCharacterRequest(req) {
   return {
     userId: Number(req.body?.userId),
     characterId: String(req.body?.characterId || "").trim(),
-    quantity: Number(req.body?.quantity),
+    stack: Number(req.body?.stack),
   };
 }
 
-function validateCharacterRequest(request, allowNegativeQuantity = false) {
+function validateCharacterRequest(request, allowNegativeStack = false) {
   if (!Number.isInteger(request.userId) || request.userId <= 0) {
     return "valid userId required";
   }
   if (!request.characterId) return "characterId required";
-  if (!Number.isInteger(request.quantity) ||
-      (!allowNegativeQuantity && request.quantity < 0)) {
-    return allowNegativeQuantity
-      ? "quantity must be an integer"
-      : "quantity must be a non-negative integer";
+  if (!Number.isInteger(request.stack) ||
+      (!allowNegativeStack && request.stack < 0)) {
+    return allowNegativeStack
+      ? "stack must be an integer"
+      : "stack must be a non-negative integer";
   }
   return null;
 }
@@ -183,6 +183,38 @@ app.patch("/api/user/nickname", async (req, res, next) => {
       data: { nickname: nicknameResult.nickname },
     });
     return res.json(toUserDto(user));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/user/player-info", async (req, res, next) => {
+  try {
+    const userId = Number(req.body?.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: "valid userId required" });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!user) return res.status(404).json({ error: "user not found" });
+
+    const [items, characters] = await Promise.all([
+      prisma.playerItem.findMany({
+        where: { userId },
+        select: { userId: true, itemId: true, quantity: true },
+        orderBy: { itemId: "asc" },
+      }),
+      prisma.playerCharacter.findMany({
+        where: { userId },
+        select: { userId: true, characterId: true, stack: true },
+        orderBy: { characterId: "asc" },
+      }),
+    ]);
+
+    return res.json({ userId, items, characters });
   } catch (error) {
     return next(error);
   }
@@ -317,14 +349,14 @@ app.post("/api/character/acquire", async (req, res, next) => {
       if (character) {
         await tx.playerCharacter.update({
           where: { id: character.id },
-          data: { stack: { increment: request.quantity } },
+          data: { stack: { increment: request.stack } },
         });
       } else {
         await tx.playerCharacter.create({
           data: {
             userId: request.userId,
             characterId: request.characterId,
-            stack: request.quantity,
+            stack: request.stack,
           },
         });
       }
@@ -408,7 +440,7 @@ app.post("/api/character/update", async (req, res, next) => {
 
     await prisma.playerCharacter.update({
       where: { id: character.id },
-      data: { stack: request.quantity },
+        data: { stack: request.stack },
     });
     return res.json({ success: true });
   } catch (error) {
