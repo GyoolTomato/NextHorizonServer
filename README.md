@@ -1,11 +1,11 @@
 # NextHorizonServerClean
 
-기존 `C:\GitHub\NextHorizon\ServerData\dev.db`를 그대로 사용하는 최소 예제 서버입니다.
+`C:\GitHub\NextHorizonServer\dev.db`를 사용하는 최소 예제 서버입니다.
 
 ## 설치
 
 ```bat
-cd /d C:\GitHub\NextHorizonServerClean
+cd /d C:\GitHub\NextHorizonServer
 copy .env.example .env
 npm install
 npx prisma generate
@@ -14,7 +14,7 @@ npx prisma generate
 `.env`의 `DATABASE_URL`이 실제 DB 경로와 같은지 확인합니다.
 
 ```env
-DATABASE_URL="file:C:/GitHub/NextHorizon/ServerData/dev.db"
+DATABASE_URL="file:C:/GitHub/NextHorizonServer/dev.db"
 PORT=3000
 ```
 
@@ -43,7 +43,7 @@ curl http://localhost:3000/catalog
 
 ```bat
 pm2.cmd delete NHServer
-pm2.cmd start server.js --name NHServer --cwd C:\GitHub\NextHorizonServerClean
+pm2.cmd start server.js --name NHServer --cwd C:\GitHub\NextHorizonServer
 pm2.cmd save
 ```
 
