@@ -22,7 +22,7 @@ model User {
 }
 
 model Mission {
-  id       String  @id
+  id       Int     @id @default(autoincrement())
   titleKey Int
   reward0  String?
   reward1  String?
@@ -30,10 +30,10 @@ model Mission {
 }
 
 model PlayerCharacter {
-  id          String   @id @default(cuid())
+  id          Int      @id @default(autoincrement())
   userId      Int
   characterId String
-  quantity    Int      @default(1)
+  stack       Int      @default(1)
   acquiredAt  DateTime @default(now())
   updatedAt   DateTime @updatedAt
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -42,7 +42,7 @@ model PlayerCharacter {
 }
 
 model PlayerItem {
-  id         String   @id @default(cuid())
+  id         Int      @id @default(autoincrement())
   userId     Int
   itemId     String
   quantity   Int      @default(0)
@@ -54,7 +54,7 @@ model PlayerItem {
 }
 
 model PlayerArmor {
-  id         String   @id @default(cuid())
+  id         Int      @id @default(autoincrement())
   userId     Int
   armorId    String
   quantity   Int      @default(0)
@@ -66,7 +66,7 @@ model PlayerArmor {
 }
 
 model PlayerWeapon {
-  id         String   @id @default(cuid())
+  id         Int      @id @default(autoincrement())
   userId     Int
   weaponId   String
   quantity   Int      @default(0)
@@ -78,7 +78,7 @@ model PlayerWeapon {
 }
 
 model GachaBanner {
-  id         String          @id
+  id         Int             @id @default(autoincrement())
   name       String
   costType   String          @default("1010002")
   singleCost Int             @default(100)
@@ -89,8 +89,8 @@ model GachaBanner {
 }
 
 model GachaPoolItem {
-  id          String      @id @default(cuid())
-  bannerId    String
+  id          Int         @id @default(autoincrement())
+  bannerId    Int
   characterId String
   weight      Int
   banner      GachaBanner @relation(fields: [bannerId], references: [id], onDelete: Cascade)
@@ -99,9 +99,9 @@ model GachaPoolItem {
 }
 
 model GachaHistory {
-  id          String      @id @default(cuid())
+  id          Int         @id @default(autoincrement())
   userId      Int
-  bannerId    String
+  bannerId    Int
   characterId String
   pullCount   Int
   costType    String
