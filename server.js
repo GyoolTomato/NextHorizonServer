@@ -142,7 +142,18 @@ app.post("/api/user", async (req, res, next) => {
     }
 
     const user = await prisma.user.create({
-      data: { localId, firebaseUid, nickname: nicknameResult.nickname },
+      data: {
+        localId,
+        firebaseUid,
+        nickname: nicknameResult.nickname,
+        characters: {
+          create: [
+            { characterId: "1020001", stack: 1 },
+            { characterId: "1020002", stack: 1 },
+            { characterId: "1020003", stack: 1 },
+          ],
+        },
+      },
     });
     return res.status(201).json(toUserDto(user));
   } catch (error) {
