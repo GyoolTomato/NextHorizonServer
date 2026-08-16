@@ -37,7 +37,7 @@ async function getPlayerData(userId) {
     }),
     prisma.playerCharacter.findMany({
       where: { userId },
-      select: { userId: true, characterId: true, stack: true },
+      select: { userId: true, characterId: true, stack: true, exp: true, level: true },
       orderBy: { characterId: "asc" },
     }),
   ]);
@@ -376,7 +376,7 @@ app.post("/api/character/list", async (req, res, next) => {
 
     const characters = await prisma.playerCharacter.findMany({
       where: { userId },
-      select: { userId: true, characterId: true, stack: true },
+      select: { userId: true, characterId: true, stack: true, exp: true, level: true },
       orderBy: { characterId: "asc" },
     });
     return res.json(characters);
@@ -403,7 +403,7 @@ app.post("/api/character/upgrade", async (req, res, next) => {
       return tx.playerCharacter.update({
         where: { id: current.id },
         data: { stack: { decrement: 1 } },
-        select: { userId: true, characterId: true, stack: true },
+      select: { userId: true, characterId: true, stack: true, exp: true, level: true },
       });
     });
 
