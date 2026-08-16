@@ -23,7 +23,25 @@ function toUserDto(user) {
     firebaseUid: user.firebaseUid,
     nickname: user.nickname,
     level: user.level,
+    items: user.items || [],
+    characters: user.characters || [],
   };
+}
+
+async function getPlayerData(userId) {
+  const [items, characters] = await Promise.all([
+    prisma.playerItem.findMany({
+      where: { userId },
+      select: { userId: true, itemId: true, quantity: true },
+      orderBy: { itemId: "asc" },
+    }),
+    prisma.playerCharacter.findMany({
+      where: { userId },
+      select: { userId: true, characterId: true, stack: true },
+      orderBy: { characterId: "asc" },
+    }),
+  ]);
+  return { items, characters };
 }
 
 function parseUserRequest(req) {
@@ -118,7 +136,13 @@ app.post("/api/user/login", async (req, res, next) => {
         : null;
     });
 
-    return res.json({ isNew: !user, user: user ? toUserDto(user) : null });
+    if (!user) return res.json({ isNew: true, user: null });
+
+    const playerData = await getPlayerData(user.id);
+    return res.json({
+      isNew: false,
+      user: toUserDto({ ...user, ...playerData }),
+    });
   } catch (error) {
     return next(error);
   }
@@ -154,8 +178,10 @@ app.post("/api/user", async (req, res, next) => {
           ],
         },
       },
+      include: { characters: true, items: true },
     });
-    return res.status(201).json(toUserDto(user));
+    const playerData = await getPlayerData(user.id);
+    return res.status(201).json(toUserDto({ ...user, ...playerData }));
   } catch (error) {
     return next(error);
   }
@@ -183,38 +209,6 @@ app.patch("/api/user/nickname", async (req, res, next) => {
       data: { nickname: nicknameResult.nickname },
     });
     return res.json(toUserDto(user));
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.post("/api/user/player-info", async (req, res, next) => {
-  try {
-    const userId = Number(req.body?.userId);
-    if (!Number.isInteger(userId) || userId <= 0) {
-      return res.status(400).json({ error: "valid userId required" });
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true },
-    });
-    if (!user) return res.status(404).json({ error: "user not found" });
-
-    const [items, characters] = await Promise.all([
-      prisma.playerItem.findMany({
-        where: { userId },
-        select: { userId: true, itemId: true, quantity: true },
-        orderBy: { itemId: "asc" },
-      }),
-      prisma.playerCharacter.findMany({
-        where: { userId },
-        select: { userId: true, characterId: true, stack: true },
-        orderBy: { characterId: "asc" },
-      }),
-    ]);
-
-    return res.json({ userId, items, characters });
   } catch (error) {
     return next(error);
   }
