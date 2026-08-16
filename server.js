@@ -37,11 +37,17 @@ async function getPlayerData(userId) {
     }),
     prisma.playerCharacter.findMany({
       where: { userId },
-      select: { userId: true, characterId: true, stack: true, exp: true, level: true },
-      orderBy: { characterId: "asc" },
+      select: { userId: true, characterKey: true, stack: true, exp: true, level: true },
+      orderBy: { characterKey: "asc" },
     }),
   ]);
-  return { items, characters };
+  return {
+    items,
+    characters: characters.map((character) => ({
+      ...character,
+      exp: Number(character.exp),
+    })),
+  };
 }
 
 function parseUserRequest(req) {
@@ -84,7 +90,7 @@ function validateItemRequest(request, allowNegativeQuantity = false) {
 function parseCharacterRequest(req) {
   return {
     userId: Number(req.body?.userId),
-    characterId: String(req.body?.characterId || "").trim(),
+    characterKey: Number(req.body?.characterKey),
     stack: Number(req.body?.stack),
   };
 }
@@ -93,7 +99,7 @@ function validateCharacterRequest(request, allowNegativeStack = false) {
   if (!Number.isInteger(request.userId) || request.userId <= 0) {
     return "valid userId required";
   }
-  if (!request.characterId) return "characterId required";
+  if (!Number.isInteger(request.characterKey) || request.characterKey <= 0) return "valid characterKey required";
   if (!Number.isInteger(request.stack) ||
       (!allowNegativeStack && request.stack < 0)) {
     return allowNegativeStack
@@ -172,9 +178,9 @@ app.post("/api/user", async (req, res, next) => {
         nickname: nicknameResult.nickname,
         characters: {
           create: [
-            { characterId: "1020001", stack: 1 },
-            { characterId: "1020002", stack: 1 },
-            { characterId: "1020003", stack: 1 },
+            { characterKey: 1020001, stack: 1 },
+            { characterKey: 1020002, stack: 1 },
+            { characterKey: 1020003, stack: 1 },
           ],
         },
       },
@@ -333,9 +339,9 @@ app.post("/api/character/acquire", async (req, res, next) => {
 
       const character = await tx.playerCharacter.findUnique({
         where: {
-          userId_characterId: {
+          userId_characterKey: {
             userId: request.userId,
-            characterId: request.characterId,
+            characterKey: request.characterKey,
           },
         },
       });
@@ -349,7 +355,7 @@ app.post("/api/character/acquire", async (req, res, next) => {
         await tx.playerCharacter.create({
           data: {
             userId: request.userId,
-            characterId: request.characterId,
+            characterKey: request.characterKey,
             stack: request.stack,
           },
         });
@@ -376,10 +382,13 @@ app.post("/api/character/list", async (req, res, next) => {
 
     const characters = await prisma.playerCharacter.findMany({
       where: { userId },
-      select: { userId: true, characterId: true, stack: true, exp: true, level: true },
-      orderBy: { characterId: "asc" },
+      select: { userId: true, characterKey: true, stack: true, exp: true, level: true },
+      orderBy: { characterKey: "asc" },
     });
-    return res.json(characters);
+    return res.json(characters.map((character) => ({
+      ...character,
+      exp: Number(character.exp),
+    })));
   } catch (error) {
     return next(error);
   }
@@ -388,29 +397,32 @@ app.post("/api/character/list", async (req, res, next) => {
 app.post("/api/character/upgrade", async (req, res, next) => {
   try {
     const userId = Number(req.body?.userId);
-    const characterId = String(req.body?.characterId || "").trim();
+    const characterKey = Number(req.body?.characterKey);
     if (!Number.isInteger(userId) || userId <= 0) {
       return res.status(400).json({ error: "valid userId required" });
     }
-    if (!characterId) return res.status(400).json({ error: "characterId required" });
+    if (!Number.isInteger(characterKey) || characterKey <= 0) return res.status(400).json({ error: "valid characterKey required" });
 
     const character = await prisma.$transaction(async (tx) => {
       const current = await tx.playerCharacter.findUnique({
-        where: { userId_characterId: { userId, characterId } },
+        where: { userId_characterKey: { userId, characterKey } },
       });
       if (!current || current.stack <= 0) return null;
 
       return tx.playerCharacter.update({
         where: { id: current.id },
         data: { stack: { decrement: 1 } },
-      select: { userId: true, characterId: true, stack: true, exp: true, level: true },
+      select: { userId: true, characterKey: true, stack: true, exp: true, level: true },
       });
     });
 
     if (!character) {
       return res.status(400).json({ error: "character not found or stack is zero" });
     }
-    return res.json(character);
+    return res.json({
+      ...character,
+      exp: Number(character.exp),
+    });
   } catch (error) {
     return next(error);
   }
@@ -424,9 +436,9 @@ app.post("/api/character/update", async (req, res, next) => {
 
     const character = await prisma.playerCharacter.findUnique({
       where: {
-        userId_characterId: {
+        userId_characterKey: {
           userId: request.userId,
-          characterId: request.characterId,
+          characterKey: request.characterKey,
         },
       },
     });
