@@ -6,6 +6,15 @@ datasource db {
   provider = "sqlite"
 }
 
+model Version {
+  id         Int      @id @default(autoincrement())
+  nowVersion String   @unique
+  downloadUrl String   @default("https://github.com/GyoolTomato/NextHorizon_Portfolio/releases")
+  createdAt  DateTime @default(now())
+
+  @@map("__Version")
+}
+
 model User {
   id           Int               @id @default(autoincrement())
   localId      String            @unique
@@ -36,6 +45,12 @@ model PlayerCharacter {
   stack       Int      @default(1)
   exp         BigInt   @default(0)
   level       Int      @default(1)
+  grade       Int      @default(0)
+  activeLv    Int      @default(0)
+  charm       Int      @default(0)
+  passiveLv0  Int      @default(0)
+  passiveLv1  Int      @default(0)
+  passiveLv2  Int      @default(0)
   acquiredAt  DateTime @default(now())
   updatedAt   DateTime @updatedAt
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -46,37 +61,46 @@ model PlayerCharacter {
 model PlayerItem {
   id         Int      @id @default(autoincrement())
   userId     Int
-  itemId     String
+  itemKey    Int
   quantity   Int      @default(0)
   acquiredAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, itemId])
+  @@unique([userId, itemKey])
 }
 
 model PlayerArmor {
   id         Int      @id @default(autoincrement())
   userId     Int
-  armorId    String
-  quantity   Int      @default(0)
+  armorKey   Int
+  equipedCharacter Int      @default(0)
   acquiredAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, armorId])
+}
+
+model Armor {
+  key   Int    @id
+  grade String
+  name  Int
+  icon  String
+  type  String
+  value Int
+
+  @@map("_105_Armors")
 }
 
 model PlayerWeapon {
   id         Int      @id @default(autoincrement())
   userId     Int
-  weaponId   String
-  quantity   Int      @default(0)
+  weaponKey  Int
+  equipedCharacter Int      @default(0)
   acquiredAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, weaponId])
 }
 
 model GachaBanner {
