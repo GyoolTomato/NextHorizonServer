@@ -1,0 +1,21 @@
+{
+  "name": "next-horizon-server-clean",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal example API for the NextHorizon SQLite database",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "7.8.0",
+    "@prisma/client": "7.8.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "prisma": "7.8.0"
+  }
+}

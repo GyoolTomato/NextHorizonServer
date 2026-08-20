@@ -15,7 +15,7 @@ npx prisma generate
 
 ```env
 DATABASE_URL="file:C:/GitHub/NextHorizonServer/dev.db"
-PORT=3000
+PORT=3099
 ```
 
 ## 직접 실행
@@ -28,15 +28,15 @@ npm start
 
 ```text
 database ready: 3 items, 6 users
-server running on port 3000
+server running on port 3099
 ```
 
 ## 확인
 
 ```bat
-curl http://localhost:3000/health
-curl "http://localhost:3000/user?uid=test-user"
-curl http://localhost:3000/catalog
+curl http://localhost:3099/health
+curl "http://localhost:3099/user?uid=test-user"
+curl http://localhost:3099/catalog
 ```
 
 ## PM2 등록

@@ -9,7 +9,7 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL is missing. Copy .env.example to .env first.");
 }
 
-const port = Number(process.env.PORT || 3099);
+const port = Number(process.env.PORT || 3000);
 const adapter = new PrismaBetterSqlite3({ url: databaseUrl });
 const prisma = new PrismaClient({ adapter });
 const app = express();
