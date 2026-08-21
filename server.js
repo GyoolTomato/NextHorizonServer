@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const { randomUUID } = require("crypto");
 const { PrismaClient } = require("@prisma/client");
 const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
 
@@ -14,7 +15,60 @@ const adapter = new PrismaBetterSqlite3({ url: databaseUrl });
 const prisma = new PrismaClient({ adapter });
 const app = express();
 
+app.set("trust proxy", "loopback");
 app.use(express.json());
+
+function writeLog(level, event, fields = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    event,
+    ...fields,
+  };
+  const message = JSON.stringify(entry, (_, value) =>
+    typeof value === "bigint" ? value.toString() : value);
+  if (level === "error") return console.error(message);
+  if (level === "warn") return console.warn(message);
+  return console.log(message);
+}
+
+function audit(req, action, fields = {}) {
+  writeLog("info", "audit", {
+    requestId: req.requestId,
+    action,
+    ...fields,
+  });
+}
+
+app.use((req, res, next) => {
+  const startedAt = process.hrtime.bigint();
+  let requestLogged = false;
+  req.requestId = randomUUID();
+  res.setHeader("X-Request-Id", req.requestId);
+
+  const logRequest = (aborted = false) => {
+    if (requestLogged) return;
+    requestLogged = true;
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const bodyUserId = Number(req.body?.userId);
+    const level = aborted || res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info";
+    writeLog(level, "http_request", {
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs: Number(durationMs.toFixed(2)),
+      ip: req.ip,
+      ...(aborted ? { aborted: true } : {}),
+      ...(Number.isInteger(bodyUserId) && bodyUserId > 0 ? { userId: bodyUserId } : {}),
+    });
+  };
+
+  res.on("finish", () => logRequest(false));
+  res.on("close", () => logRequest(!res.writableFinished));
+
+  next();
+});
 
 function toUserDto(user) {
   return {
@@ -177,9 +231,13 @@ app.post("/api/user/login", async (req, res, next) => {
         : null;
     });
 
-    if (!user) return res.json({ isNew: true, user: null });
+    if (!user) {
+      audit(req, "LOGIN_NEW_USER_REQUIRED");
+      return res.json({ isNew: true, user: null });
+    }
 
     const playerData = await getPlayerData(user.id);
+    audit(req, "LOGIN_SUCCEEDED", { userId: user.id });
     return res.json({
       isNew: false,
       user: toUserDto({ ...user, ...playerData }),
@@ -222,6 +280,7 @@ app.post("/api/user", async (req, res, next) => {
       include: { characters: true, items: true },
     });
     const playerData = await getPlayerData(user.id);
+    audit(req, "USER_CREATED", { userId: user.id });
     return res.status(201).json(toUserDto({ ...user, ...playerData }));
   } catch (error) {
     return next(error);
@@ -249,6 +308,7 @@ app.patch("/api/user/nickname", async (req, res, next) => {
       where: { id: existingUser.id },
       data: { nickname: nicknameResult.nickname },
     });
+    audit(req, "NICKNAME_CHANGED", { userId: user.id });
     return res.json(toUserDto(user));
   } catch (error) {
     return next(error);
@@ -287,6 +347,7 @@ app.post("/api/item/acquire", async (req, res, next) => {
     });
 
     if (!result) return res.status(404).json({ error: "user not found" });
+    audit(req, "ITEM_ACQUIRED", request);
     return res.json({ success: true });
   } catch (error) {
     return next(error);
@@ -377,6 +438,7 @@ app.post("/api/armor/equip", async (req, res, next) => {
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
+    audit(req, "ARMOR_EQUIPPED", { userId, playerArmorId, characterKey, armorKey: result.value.armorKey });
     return res.json(result.value);
   } catch (error) {
     return next(error);
@@ -395,6 +457,7 @@ app.post("/api/armor/release", async (req, res, next) => {
       where: { id: playerArmorId }, data: { equipedCharacter: 0 },
       select: { id: true, userId: true, armorKey: true, level: true, exp: true, equipedCharacter: true },
     });
+    audit(req, "ARMOR_RELEASED", { userId, playerArmorId, armorKey: released.armorKey });
     return res.json(released);
   } catch (error) { return next(error); }
 });
@@ -447,6 +510,7 @@ app.post("/api/weapon/equip", async (req, res, next) => {
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
+    audit(req, "WEAPON_EQUIPPED", { userId, playerWeaponId, characterKey, weaponKey: result.value.weaponKey });
     return res.json(result.value);
   } catch (error) {
     return next(error);
@@ -465,6 +529,7 @@ app.post("/api/weapon/release", async (req, res, next) => {
       where: { id: playerWeaponId }, data: { equipedCharacter: 0 },
       select: { id: true, userId: true, weaponKey: true, level: true, exp: true, equipedCharacter: true },
     });
+    audit(req, "WEAPON_RELEASED", { userId, playerWeaponId, weaponKey: released.weaponKey });
     return res.json(released);
   } catch (error) { return next(error); }
 });
@@ -491,6 +556,7 @@ app.post("/api/item/consume", async (req, res, next) => {
     if (!result) {
       return res.status(400).json({ error: "item not found or insufficient quantity" });
     }
+    audit(req, "ITEM_CONSUMED", request);
     return res.json({ success: true });
   } catch (error) {
     return next(error);
@@ -512,6 +578,7 @@ app.post("/api/item/update", async (req, res, next) => {
       where: { id: item.id },
       data: { quantity: request.quantity },
     });
+    audit(req, "ITEM_QUANTITY_UPDATED", request);
     return res.json({ success: true });
   } catch (error) {
     return next(error);
@@ -554,6 +621,7 @@ app.post("/api/character/acquire", async (req, res, next) => {
     });
 
     if (!result) return res.status(404).json({ error: "user not found" });
+    audit(req, "CHARACTER_ACQUIRED", request);
     return res.json({ success: true });
   } catch (error) {
     return next(error);
@@ -615,6 +683,11 @@ app.post("/api/character/upgrade", async (req, res, next) => {
     if (!character) {
       return res.status(400).json({ error: "character not found or stack is zero" });
     }
+    audit(req, "CHARACTER_UPGRADED", {
+      userId,
+      characterKey,
+      remainingStack: character.stack,
+    });
     return res.json({
       ...character,
       exp: Number(character.exp),
@@ -644,6 +717,7 @@ app.post("/api/character/update", async (req, res, next) => {
       where: { id: character.id },
         data: { stack: request.stack },
     });
+    audit(req, "CHARACTER_STACK_UPDATED", request);
     return res.json({ success: true });
   } catch (error) {
     return next(error);
@@ -701,6 +775,13 @@ app.post("/api/character/level-up", async (req, res, next) => {
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
+    audit(req, "CHARACTER_LEVEL_UP", {
+      userId,
+      characterKey,
+      addedExp: exp,
+      level: result.value.level,
+      remainingExp: result.value.exp,
+    });
     return res.json(result.value);
   } catch (error) {
     return next(error);
@@ -733,21 +814,28 @@ app.use((req, res) => {
 });
 
 app.use((error, req, res, next) => {
-  console.error(error);
+  writeLog("error", "unhandled_error", {
+    requestId: req.requestId,
+    method: req.method,
+    path: req.path,
+    errorName: error?.name || "Error",
+    errorMessage: error?.message || String(error),
+    stack: error?.stack,
+  });
   res.status(500).json({ error: "internal server error" });
 });
 
 async function start() {
   const userCount = await prisma.user.count();
 
-  console.log(`database ready: ${userCount} users`);
+  writeLog("info", "database_ready", { userCount });
   app.listen(port, "0.0.0.0", () => {
-    console.log(`server running on port ${port}`);
+    writeLog("info", "server_started", { port });
   });
 }
 
 async function shutdown(signal) {
-  console.log(`${signal}: shutting down`);
+  writeLog("info", "server_shutting_down", { signal });
   await prisma.$disconnect();
   process.exit(0);
 }
@@ -756,9 +844,11 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 start().catch(async (error) => {
-  console.error("failed to start server");
-  console.error(`DATABASE_URL=${databaseUrl}`);
-  console.error(error);
+  writeLog("error", "server_start_failed", {
+    errorName: error?.name || "Error",
+    errorMessage: error?.message || String(error),
+    stack: error?.stack,
+  });
   await prisma.$disconnect();
   process.exit(1);
 });
