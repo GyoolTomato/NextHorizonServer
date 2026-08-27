@@ -1,0 +1,4 @@
+{"timestamp":"2026-08-27T16:13:21.242+09:00","level":"info","event":"database_ready","userCount":1}
+{"timestamp":"2026-08-27T16:13:21.263+09:00","level":"info","event":"server_started","port":3199}
+{"timestamp":"2026-08-27T16:13:44.700+09:00","level":"info","event":"http_request","requestId":"2895a299-1e8f-4504-b214-6e3a4ffa669e","method":"GET","path":"/health","statusCode":200,"durationMs":6.08,"ip":"127.0.0.1"}
+{"timestamp":"2026-08-27T16:13:44.900+09:00","level":"warn","event":"http_request","requestId":"64d39f0f-c6b6-4e7c-bec1-c6db1e81a4c4","method":"POST","path":"/api/user/login","statusCode":400,"durationMs":0.68,"ip":"127.0.0.1"}

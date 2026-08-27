@@ -2,6 +2,8 @@ require("dotenv").config();
 
 const express = require("express");
 const { randomUUID } = require("crypto");
+const { appendFileSync, mkdirSync } = require("fs");
+const path = require("path");
 const { PrismaClient } = require("@prisma/client");
 const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
 
@@ -14,19 +16,37 @@ const port = Number(process.env.PORT || 3000);
 const adapter = new PrismaBetterSqlite3({ url: databaseUrl });
 const prisma = new PrismaClient({ adapter });
 const app = express();
+const logDirectory = path.join(__dirname, ".logs");
+
+mkdirSync(logDirectory, { recursive: true });
 
 app.set("trust proxy", "loopback");
-app.use(express.json());
 
 function writeLog(level, event, fields = {}) {
+  const koreaTime = new Date(Date.now() + (9 * 60 * 60 * 1000))
+    .toISOString()
+    .replace("Z", "+09:00");
   const entry = {
-    timestamp: new Date().toISOString(),
+    timestamp: koreaTime,
     level,
     event,
     ...fields,
   };
   const message = JSON.stringify(entry, (_, value) =>
     typeof value === "bigint" ? value.toString() : value);
+
+  const logFile = path.join(logDirectory, `${koreaTime.slice(0, 10)}-server.txt`);
+  try {
+    appendFileSync(logFile, `${message}\n`, "utf8");
+  } catch (error) {
+    console.error(JSON.stringify({
+      timestamp: koreaTime,
+      level: "error",
+      event: "log_file_write_failed",
+      errorMessage: error?.message || String(error),
+    }));
+  }
+
   if (level === "error") return console.error(message);
   if (level === "warn") return console.warn(message);
   return console.log(message);
@@ -69,6 +89,8 @@ app.use((req, res, next) => {
 
   next();
 });
+
+app.use(express.json());
 
 function toUserDto(user) {
   return {

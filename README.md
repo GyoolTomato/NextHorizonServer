@@ -47,4 +47,14 @@ pm2.cmd start server.js --name NHServer --cwd C:\GitHub\NextHorizonServer
 pm2.cmd save
 ```
 
-기존 서버와 달리 시작 시 카탈로그를 매번 수정하지 않습니다. DB 연결과 핵심 테이블을 확인한 뒤 서버를 시작하므로, 잘못된 DB를 지정하면 로그에 `DATABASE_URL`과 실제 오류가 바로 표시됩니다.
+기존 서버와 달리 시작 시 카탈로그를 매번 수정하지 않습니다. DB 연결과 핵심 테이블을 확인한 뒤 서버를 시작합니다.
+
+## 로그
+
+로그인과 모든 API 요청, 주요 데이터 변경, 서버 오류는 JSON Lines 형식으로 기록됩니다.
+
+```text
+.logs/YYYY-MM-DD-server.txt
+```
+
+파일 날짜와 로그 시각은 시스템 시간대와 관계없이 한국시간(`Asia/Seoul`)을 사용합니다. 한국시간 자정 이후 첫 로그부터 새 날짜 파일에 기록됩니다.
