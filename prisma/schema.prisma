@@ -86,6 +86,7 @@ model Armor {
   key   Int    @id
   grade String
   name  Int
+  desc  Int
   icon  String
   type  String
   value Int
