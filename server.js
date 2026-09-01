@@ -202,24 +202,6 @@ function validateCharacterRequest(request, allowNegativeStack = false) {
   return null;
 }
 
-function getCharacterExpToNextLevel(level) {
-  if (level >= 100) return 0;
-  if (level <= 19) return 100;
-  if (level <= 39) return 150;
-  if (level <= 59) return 200;
-  if (level <= 79) return 250;
-  return 300;
-}
-
-function getCharacterTotalExpRequired(level) {
-  if (level <= 1) return 0;
-  let total = 0;
-  for (let currentLevel = 1; currentLevel < level; currentLevel++) {
-    total += getCharacterExpToNextLevel(currentLevel);
-  }
-  return total;
-}
-
 app.get("/health", async (req, res, next) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -750,58 +732,157 @@ app.post("/api/character/level-up", async (req, res, next) => {
   try {
     const userId = Number(req.body?.userId);
     const characterKey = Number(req.body?.characterKey);
-    const expValue = req.body?.exp;
-    let exp;
-    try {
-      exp = BigInt(String(expValue));
-    } catch {
-      return res.status(400).json({ error: "exp must be a positive integer" });
-    }
+    const eItemTypes = req.body?.eItemTypes;
+    const counts = req.body?.counts;
     if (!Number.isInteger(userId) || userId <= 0) {
       return res.status(400).json({ error: "valid userId required" });
     }
     if (!Number.isInteger(characterKey) || characterKey <= 0) {
       return res.status(400).json({ error: "valid characterKey required" });
     }
-    if (exp <= 0n) {
-      return res.status(400).json({ error: "exp must be a positive integer" });
+    if (!Array.isArray(eItemTypes) || !Array.isArray(counts) || eItemTypes.length === 0) {
+      return res.status(400).json({ error: "eItemTypes and counts arrays required" });
+    }
+    if (eItemTypes.length !== counts.length) {
+      return res.status(400).json({ error: "eItemTypes and counts length mismatch" });
+    }
+
+    const requestedItems = new Map();
+    for (let index = 0; index < eItemTypes.length; index += 1) {
+      const eItemType = Number(eItemTypes[index]);
+      const count = Number(counts[index]);
+      if (!Number.isSafeInteger(eItemType) || eItemType <= 0) {
+        return res.status(400).json({ error: `invalid eItemTypes[${index}]` });
+      }
+      if (!Number.isSafeInteger(count) || count <= 0) {
+        return res.status(400).json({ error: `invalid counts[${index}]` });
+      }
+      const totalCount = (requestedItems.get(eItemType) || 0) + count;
+      if (!Number.isSafeInteger(totalCount) || totalCount > 2147483647) {
+        return res.status(400).json({ error: `counts[${index}] is too large` });
+      }
+      requestedItems.set(eItemType, totalCount);
     }
 
     const result = await prisma.$transaction(async (tx) => {
+      const [commonValues, levelRows, enumRows, itemRows] = await Promise.all([
+        tx.$queryRawUnsafe(
+          'SELECT "key", "value" FROM "_100_CommonValues" WHERE "key" IN (1000001, 1000002)'
+        ),
+        tx.$queryRawUnsafe(
+          'SELECT "level", "expToNextLevel", "totalExpRequired" FROM "_107_CharacterLevel" ORDER BY "level" ASC'
+        ),
+        tx.$queryRawUnsafe(
+          'SELECT rowid AS "eItemType", "ItemType" AS "type" FROM "_000_Global_Enum" WHERE "ItemType" IS NOT NULL'
+        ),
+        tx.$queryRawUnsafe(
+          'SELECT "key", "type" FROM "_101_Items"'
+        ),
+      ]);
+
+      const commonValueMap = new Map(commonValues.map((row) => [Number(row.key), Number(row.value)]));
+      const maxLevel = commonValueMap.get(1000001);
+      const expPerCard = commonValueMap.get(1000002);
+      if (!Number.isSafeInteger(maxLevel) || maxLevel <= 0) {
+        throw new Error("invalid max character level table value");
+      }
+      if (!Number.isSafeInteger(expPerCard) || expPerCard <= 0) {
+        throw new Error("invalid ExpCard experience table value");
+      }
+
+      const levels = levelRows.map((row) => ({
+        level: Number(row.level),
+        expToNextLevel: Number(row.expToNextLevel),
+        totalExpRequired: Number(row.totalExpRequired),
+      }));
+      const levelMap = new Map(levels.map((row) => [row.level, row]));
+      const maxLevelRow = levelMap.get(maxLevel);
+      if (!maxLevelRow) throw new Error("max character level is missing from _107_CharacterLevel");
+
       const character = await tx.playerCharacter.findUnique({
         where: { userId_characterKey: { userId, characterKey } },
       });
       if (!character) return { error: "character not found" };
-      if (character.level >= 100) return { error: "character is already max level" };
+      if (character.level >= maxLevel) return { error: "character is already max level" };
+
+      const currentLevelRow = levelMap.get(character.level);
+      if (!currentLevelRow) throw new Error("character level is missing from _107_CharacterLevel");
+
+      const enumTypeMap = new Map(enumRows.map((row) => [Number(row.eItemType), String(row.type)]));
+      const itemTypeMap = new Map(itemRows.map((row) => [String(row.type), Number(row.key)]));
+      const consumptions = [];
+      let addedExp = 0n;
+
+      for (const [eItemType, count] of requestedItems) {
+        const itemType = enumTypeMap.get(eItemType);
+        if (!itemType) return { error: `unknown EItemType: ${eItemType}` };
+        if (itemType !== "ExpCard") return { error: `item type cannot grant character exp: ${itemType}` };
+
+        const itemKey = itemTypeMap.get(itemType);
+        if (!Number.isSafeInteger(itemKey)) throw new Error(`item table row missing for type: ${itemType}`);
+        const inventoryItem = await tx.playerItem.findUnique({
+          where: { userId_itemKey: { userId, itemKey } },
+        });
+        if (!inventoryItem || inventoryItem.quantity < count) {
+          return { error: `not enough item: ${itemType}` };
+        }
+
+        consumptions.push({ eItemType, itemKey, count, inventoryItem });
+        addedExp += BigInt(expPerCard) * BigInt(count);
+      }
 
       const currentExp = BigInt(character.exp);
-      const addedExp = exp;
-      const totalExp = BigInt(getCharacterTotalExpRequired(character.level)) + currentExp + addedExp;
-      if (totalExp > 19900n) return { error: "exp exceeds max level" };
-
-      let level = character.level;
-      let remainingExp = currentExp + addedExp;
-      while (level < 100) {
-        const requiredExp = BigInt(getCharacterExpToNextLevel(level));
-        if (remainingExp < requiredExp) break;
-        remainingExp -= requiredExp;
-        level += 1;
+      const totalExp = BigInt(currentLevelRow.totalExpRequired) + currentExp + addedExp;
+      if (totalExp > BigInt(maxLevelRow.totalExpRequired)) {
+        return { error: "exp exceeds max level" };
       }
+
+      let targetLevelRow = currentLevelRow;
+      for (const levelRow of levels) {
+        if (levelRow.level > maxLevel) break;
+        if (BigInt(levelRow.totalExpRequired) > totalExp) break;
+        targetLevelRow = levelRow;
+      }
+      const remainingExp = totalExp - BigInt(targetLevelRow.totalExpRequired);
 
       const updated = await tx.playerCharacter.update({
         where: { id: character.id },
-        data: { level, exp: remainingExp },
+        data: { level: targetLevelRow.level, exp: remainingExp },
         select: { characterKey: true, level: true, exp: true },
       });
-      return { value: { ...updated, exp: Number(updated.exp) } };
+
+      const updatedItems = [];
+      for (const consumption of consumptions) {
+        const updatedItem = await tx.playerItem.update({
+          where: { id: consumption.inventoryItem.id },
+          data: { quantity: { decrement: consumption.count } },
+          select: { userId: true, itemKey: true, quantity: true },
+        });
+        updatedItems.push(updatedItem);
+      }
+
+      return {
+        value: {
+          ...updated,
+          exp: Number(updated.exp),
+          items: updatedItems,
+        },
+        addedExp,
+        consumptions: consumptions.map(({ eItemType, itemKey, count }) => ({
+          eItemType,
+          itemKey,
+          count,
+        })),
+      };
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
     audit(req, "CHARACTER_LEVEL_UP", {
       userId,
       characterKey,
-      addedExp: exp,
-      level: result.value.level,
+      addedExp: result.addedExp,
+      consumptions: result.consumptions,
+      characterLevel: result.value.level,
       remainingExp: result.value.exp,
     });
     return res.json(result.value);
