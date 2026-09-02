@@ -268,23 +268,36 @@ app.post("/api/user", async (req, res, next) => {
       return res.status(409).json({ error: "localId already exists" });
     }
 
-    const user = await prisma.user.create({
-      data: {
-        localId,
-        firebaseUid,
-        nickname: nicknameResult.nickname,
-        characters: {
-          create: [
-            { characterKey: 1020001, stack: 1 },
-            { characterKey: 1020002, stack: 1 },
-            { characterKey: 1020003, stack: 1 },
-          ],
+    const user = await prisma.$transaction(async (tx) => {
+      const itemRows = await tx.$queryRawUnsafe(
+        'SELECT "key" FROM "_101_Items" ORDER BY "key" ASC'
+      );
+      const itemKeys = itemRows.map((item) => Number(item.key));
+      if (itemKeys.length === 0 || itemKeys.some((itemKey) => !Number.isSafeInteger(itemKey))) {
+        throw new Error("_101_Items contains no valid item keys");
+      }
+
+      return tx.user.create({
+        data: {
+          localId,
+          firebaseUid,
+          nickname: nicknameResult.nickname,
+          characters: {
+            create: [
+              { characterKey: 1020001, stack: 1 },
+              { characterKey: 1020002, stack: 1 },
+              { characterKey: 1020003, stack: 1 },
+            ],
+          },
+          items: {
+            create: itemKeys.map((itemKey) => ({ itemKey, quantity: 100 })),
+          },
         },
-      },
-      include: { characters: true, items: true },
+        include: { characters: true, items: true },
+      });
     });
     const playerData = await getPlayerData(user.id);
-    audit(req, "USER_CREATED", { userId: user.id });
+    audit(req, "USER_CREATED", { userId: user.id, initialItemCount: user.items.length });
     return res.status(201).json(toUserDto({ ...user, ...playerData }));
   } catch (error) {
     return next(error);
