@@ -941,7 +941,62 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: "internal server error" });
 });
 
+const existingUserInitialItemsMigration = "20260903_existing_users_add_all_items_100";
+
+async function applyExistingUserInitialItemsMigration() {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "__ServerMigration" (' +
+      '"key" TEXT PRIMARY KEY, "appliedAt" TEXT NOT NULL)'
+    );
+    const appliedRows = await tx.$queryRawUnsafe(
+      'SELECT "key" FROM "__ServerMigration" WHERE "key" = ?',
+      existingUserInitialItemsMigration
+    );
+    if (appliedRows.length > 0) return { applied: false };
+
+    const [users, itemRows] = await Promise.all([
+      tx.user.findMany({ select: { id: true }, orderBy: { id: "asc" } }),
+      tx.$queryRawUnsafe('SELECT "key" FROM "_101_Items" ORDER BY "key" ASC'),
+    ]);
+    const itemKeys = itemRows.map((item) => Number(item.key));
+    if (itemKeys.length === 0 || itemKeys.some((itemKey) => !Number.isSafeInteger(itemKey))) {
+      throw new Error("_101_Items contains no valid item keys");
+    }
+
+    for (const user of users) {
+      for (const itemKey of itemKeys) {
+        await tx.playerItem.upsert({
+          where: { userId_itemKey: { userId: user.id, itemKey } },
+          update: { quantity: { increment: 100 } },
+          create: { userId: user.id, itemKey, quantity: 100 },
+        });
+      }
+    }
+
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      existingUserInitialItemsMigration
+    );
+    return {
+      applied: true,
+      userCount: users.length,
+      itemTypeCount: itemKeys.length,
+      updatedRowCount: users.length * itemKeys.length,
+    };
+  });
+}
+
 async function start() {
+  const migration = await applyExistingUserInitialItemsMigration();
+  if (migration.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: existingUserInitialItemsMigration,
+      userCount: migration.userCount,
+      itemTypeCount: migration.itemTypeCount,
+      updatedRowCount: migration.updatedRowCount,
+    });
+  }
   const userCount = await prisma.user.count();
 
   writeLog("info", "database_ready", { userCount });
