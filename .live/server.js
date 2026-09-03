@@ -92,17 +92,96 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+const PLAYER_EXP_ITEM_KEY = 1010003;
+
+function toPlayerExperienceDto(user) {
+  return {
+    level: user.level,
+    exp: Number(user.exp),
+  };
+}
+
 function toUserDto(user) {
   return {
     id: user.id,
     localId: user.localId,
     firebaseUid: user.firebaseUid,
     nickname: user.nickname,
-    level: user.level,
+    ...toPlayerExperienceDto(user),
     items: user.items || [],
     characters: user.characters || [],
     armors: user.armors || [],
     weapons: user.weapons || [],
+  };
+}
+
+async function grantPlayerExperience(tx, userId, amount) {
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    throw new Error("player experience must be a non-negative safe integer");
+  }
+
+  const [user, levelRows] = await Promise.all([
+    tx.user.findUnique({ where: { id: userId } }),
+    tx.$queryRawUnsafe(
+      'SELECT "level", "expToNextLevel" FROM "_108_PlayerLevel" ORDER BY "level" ASC'
+    ),
+  ]);
+  if (!user) return null;
+  if (levelRows.length === 0) throw new Error("_108_PlayerLevel contains no levels");
+
+  const levels = levelRows.map((row) => ({
+    level: Number(row.level),
+    expToNextLevel: Number(row.expToNextLevel),
+  }));
+  const levelMap = new Map(levels.map((row) => [row.level, row]));
+  const maxLevel = levels[levels.length - 1].level;
+  if (!Number.isSafeInteger(maxLevel) || maxLevel <= 0) {
+    throw new Error("invalid max player level in _108_PlayerLevel");
+  }
+  if (!levelMap.has(user.level)) {
+    throw new Error(`player level ${user.level} is missing from _108_PlayerLevel`);
+  }
+
+  let level = user.level;
+  let exp = BigInt(user.exp);
+  let remaining = BigInt(amount);
+  let applied = 0n;
+
+  while (remaining > 0n && level < maxLevel) {
+    const requiredValue = levelMap.get(level)?.expToNextLevel;
+    if (!Number.isSafeInteger(requiredValue) || requiredValue <= 0) {
+      throw new Error(`invalid player exp requirement for level ${level}`);
+    }
+    const required = BigInt(requiredValue);
+    if (exp < 0n || exp >= required) {
+      throw new Error(`invalid current player exp for level ${level}`);
+    }
+
+    const needed = required - exp;
+    const consumed = remaining < needed ? remaining : needed;
+    exp += consumed;
+    remaining -= consumed;
+    applied += consumed;
+    if (exp >= required) {
+      level += 1;
+      exp = 0n;
+    }
+  }
+
+  if (level >= maxLevel) exp = 0n;
+  const updated = await tx.user.update({
+    where: { id: userId },
+    data: {
+      level,
+      exp,
+      progressExp: BigInt(user.progressExp) + applied,
+      lifetimeExp: BigInt(user.lifetimeExp) + BigInt(amount),
+    },
+  });
+  return {
+    ...toPlayerExperienceDto(updated),
+    grantedExp: amount,
+    appliedExp: Number(applied),
   };
 }
 
@@ -272,12 +351,14 @@ app.post("/api/user", async (req, res, next) => {
       const itemRows = await tx.$queryRawUnsafe(
         'SELECT "key" FROM "_101_Items" ORDER BY "key" ASC'
       );
-      const itemKeys = itemRows.map((item) => Number(item.key));
+      const itemKeys = itemRows
+        .map((item) => Number(item.key))
+        .filter((itemKey) => itemKey !== PLAYER_EXP_ITEM_KEY);
       if (itemKeys.length === 0 || itemKeys.some((itemKey) => !Number.isSafeInteger(itemKey))) {
         throw new Error("_101_Items contains no valid item keys");
       }
 
-      return tx.user.create({
+      const createdUser = await tx.user.create({
         data: {
           localId,
           firebaseUid,
@@ -293,6 +374,11 @@ app.post("/api/user", async (req, res, next) => {
             create: itemKeys.map((itemKey) => ({ itemKey, quantity: 100 })),
           },
         },
+        include: { characters: true, items: true },
+      });
+      await grantPlayerExperience(tx, createdUser.id, 100);
+      return tx.user.findUnique({
+        where: { id: createdUser.id },
         include: { characters: true, items: true },
       });
     });
@@ -339,9 +425,19 @@ app.post("/api/item/acquire", async (req, res, next) => {
     if (validationError) return res.status(400).json({ error: validationError });
 
     const result = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.findUnique({ where: { id: request.userId } });
-      if (!user) return false;
+      if (request.itemKey === PLAYER_EXP_ITEM_KEY) {
+        const playerExperience = await grantPlayerExperience(
+          tx,
+          request.userId,
+          request.quantity
+        );
+        return playerExperience
+          ? { type: "playerExp", playerExperience }
+          : { error: "user not found", status: 404 };
+      }
 
+      const user = await tx.user.findUnique({ where: { id: request.userId } });
+      if (!user) return { error: "user not found", status: 404 };
       const item = await tx.playerItem.findUnique({
         where: { userId_itemKey: { userId: request.userId, itemKey: request.itemKey } },
       });
@@ -360,10 +456,20 @@ app.post("/api/item/acquire", async (req, res, next) => {
           },
         });
       }
-      return true;
+      return { type: "item" };
     });
 
-    if (!result) return res.status(404).json({ error: "user not found" });
+    if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    if (result.type === "playerExp") {
+      audit(req, "PLAYER_EXP_ACQUIRED", {
+        ...request,
+        playerLevel: result.playerExperience.level,
+        playerExp: result.playerExperience.exp,
+        grantedExp: result.playerExperience.grantedExp,
+        appliedExp: result.playerExperience.appliedExp,
+      });
+      return res.json({ success: true, playerExperience: result.playerExperience });
+    }
     audit(req, "ITEM_ACQUIRED", request);
     return res.json({ success: true });
   } catch (error) {
@@ -556,6 +662,9 @@ app.post("/api/item/consume", async (req, res, next) => {
     const request = parseItemRequest(req);
     const validationError = validateItemRequest(request);
     if (validationError) return res.status(400).json({ error: validationError });
+    if (request.itemKey === PLAYER_EXP_ITEM_KEY) {
+      return res.status(400).json({ error: "PlayerExp is not an inventory item" });
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       const item = await tx.playerItem.findUnique({
@@ -585,6 +694,9 @@ app.post("/api/item/update", async (req, res, next) => {
     const request = parseItemRequest(req);
     const validationError = validateItemRequest(request, true);
     if (validationError) return res.status(400).json({ error: validationError });
+    if (request.itemKey === PLAYER_EXP_ITEM_KEY) {
+      return res.status(400).json({ error: "PlayerExp is not an inventory item" });
+    }
 
     const item = await prisma.playerItem.findUnique({
       where: { userId_itemKey: { userId: request.userId, itemKey: request.itemKey } },
@@ -942,6 +1054,90 @@ app.use((error, req, res, next) => {
 });
 
 const existingUserInitialItemsMigration = "20260903_existing_users_add_all_items_100";
+const playerExperienceSchemaMigration = "20260903_player_experience_fields";
+const playerExpInventoryCleanupMigration = "20260903_player_exp_inventory_cleanup";
+const missingInitialPlayerExpRepairMigration = "20260903_missing_initial_player_exp_repair_v2";
+const playerMissionsSchemaMigration = "20260903_player_missions_schema";
+
+async function applyPlayerMissionsSchemaMigration() {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "__ServerMigration" (' +
+      '"key" TEXT PRIMARY KEY, "appliedAt" TEXT NOT NULL)'
+    );
+    const appliedRows = await tx.$queryRawUnsafe(
+      'SELECT "key" FROM "__ServerMigration" WHERE "key" = ?',
+      playerMissionsSchemaMigration
+    );
+    if (appliedRows.length > 0) return { applied: false };
+
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "PlayerMissions" (' +
+      '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, ' +
+      '"userId" INTEGER NOT NULL, ' +
+      '"missionKey" INTEGER NOT NULL, ' +
+      '"progress" INTEGER NOT NULL DEFAULT 0, ' +
+      '"isClaimed" BOOLEAN NOT NULL DEFAULT false, ' +
+      '"cycleStartedAt" DATETIME NOT NULL, ' +
+      'CONSTRAINT "PlayerMissions_userId_fkey" FOREIGN KEY ("userId") ' +
+      'REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE)'
+    );
+    await tx.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "PlayerMissions_userId_missionKey_key" ' +
+      'ON "PlayerMissions"("userId", "missionKey")'
+    );
+    await tx.$executeRawUnsafe('DROP TABLE IF EXISTS "Mission"');
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerMissionsSchemaMigration
+    );
+    return { applied: true };
+  });
+}
+
+async function applyPlayerExperienceSchemaMigration() {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "__ServerMigration" (' +
+      '"key" TEXT PRIMARY KEY, "appliedAt" TEXT NOT NULL)'
+    );
+    const appliedRows = await tx.$queryRawUnsafe(
+      'SELECT "key" FROM "__ServerMigration" WHERE "key" = ?',
+      playerExperienceSchemaMigration
+    );
+    if (appliedRows.length > 0) return { applied: false };
+
+    const columns = await tx.$queryRawUnsafe('PRAGMA table_info("User")');
+    const columnNames = new Set(columns.map((column) => String(column.name)));
+    let schemaChanged = false;
+    for (const columnName of ["exp", "progressExp", "lifetimeExp"]) {
+      if (!columnNames.has(columnName)) {
+        await tx.$executeRawUnsafe(
+          `ALTER TABLE "User" ADD COLUMN "${columnName}" BIGINT NOT NULL DEFAULT 0`
+        );
+        schemaChanged = true;
+      }
+    }
+
+    if (schemaChanged) {
+      await tx.$executeRawUnsafe(
+        'UPDATE "User" SET ' +
+        '"progressExp" = COALESCE((' +
+        'SELECT "totalExpRequired" FROM "_108_PlayerLevel" WHERE "level" = "User"."level"' +
+        '), 0) + "exp", ' +
+        '"lifetimeExp" = COALESCE((' +
+        'SELECT "totalExpRequired" FROM "_108_PlayerLevel" WHERE "level" = "User"."level"' +
+        '), 0) + "exp"'
+      );
+    }
+
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerExperienceSchemaMigration
+    );
+    return { applied: true, schemaChanged };
+  });
+}
 
 async function applyExistingUserInitialItemsMigration() {
   return prisma.$transaction(async (tx) => {
@@ -959,7 +1155,9 @@ async function applyExistingUserInitialItemsMigration() {
       tx.user.findMany({ select: { id: true }, orderBy: { id: "asc" } }),
       tx.$queryRawUnsafe('SELECT "key" FROM "_101_Items" ORDER BY "key" ASC'),
     ]);
-    const itemKeys = itemRows.map((item) => Number(item.key));
+    const itemKeys = itemRows
+      .map((item) => Number(item.key))
+      .filter((itemKey) => itemKey !== PLAYER_EXP_ITEM_KEY);
     if (itemKeys.length === 0 || itemKeys.some((itemKey) => !Number.isSafeInteger(itemKey))) {
       throw new Error("_101_Items contains no valid item keys");
     }
@@ -987,7 +1185,101 @@ async function applyExistingUserInitialItemsMigration() {
   });
 }
 
+async function applyPlayerExpInventoryCleanupMigration() {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "__ServerMigration" (' +
+      '"key" TEXT PRIMARY KEY, "appliedAt" TEXT NOT NULL)'
+    );
+    const appliedRows = await tx.$queryRawUnsafe(
+      'SELECT "key" FROM "__ServerMigration" WHERE "key" = ?',
+      playerExpInventoryCleanupMigration
+    );
+    if (appliedRows.length > 0) return { applied: false };
+
+    const playerExpItems = await tx.playerItem.findMany({
+      where: { itemKey: PLAYER_EXP_ITEM_KEY, quantity: { gt: 0 } },
+      select: { userId: true, quantity: true },
+    });
+    for (const item of playerExpItems) {
+      await grantPlayerExperience(tx, item.userId, item.quantity);
+    }
+    const removedCount = await tx.playerItem.deleteMany({ where: { itemKey: PLAYER_EXP_ITEM_KEY } });
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerExpInventoryCleanupMigration
+    );
+    return {
+      applied: true,
+      convertedCount: playerExpItems.length,
+      removedCount: removedCount.count,
+    };
+  });
+}
+
+async function applyMissingInitialPlayerExpRepairMigration() {
+  return prisma.$transaction(async (tx) => {
+    const appliedRows = await tx.$queryRawUnsafe(
+      'SELECT "key" FROM "__ServerMigration" WHERE "key" = ?',
+      missingInitialPlayerExpRepairMigration
+    );
+    if (appliedRows.length > 0) return { applied: false };
+
+    const users = await tx.user.findMany({
+      select: {
+        id: true,
+        level: true,
+        exp: true,
+        progressExp: true,
+        lifetimeExp: true,
+      },
+    });
+    for (const user of users) {
+      const levelRows = await tx.$queryRawUnsafe(
+        'SELECT "totalExpRequired" FROM "_108_PlayerLevel" WHERE "level" = ?',
+        user.level
+      );
+      if (levelRows.length !== 1) {
+        throw new Error(`player level ${user.level} is missing from _108_PlayerLevel`);
+      }
+      const minimumTotal = BigInt(levelRows[0].totalExpRequired) + BigInt(user.exp);
+      if (BigInt(user.progressExp) < minimumTotal || BigInt(user.lifetimeExp) < minimumTotal) {
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            progressExp: BigInt(user.progressExp) < minimumTotal
+              ? minimumTotal
+              : user.progressExp,
+            lifetimeExp: BigInt(user.lifetimeExp) < minimumTotal
+              ? minimumTotal
+              : user.lifetimeExp,
+          },
+        });
+      }
+      await grantPlayerExperience(tx, user.id, 100);
+    }
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      missingInitialPlayerExpRepairMigration
+    );
+    return { applied: true, repairedUserCount: users.length };
+  });
+}
+
 async function start() {
+  const missionsSchema = await applyPlayerMissionsSchemaMigration();
+  if (missionsSchema.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerMissionsSchemaMigration,
+    });
+  }
+  const experienceSchema = await applyPlayerExperienceSchemaMigration();
+  if (experienceSchema.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerExperienceSchemaMigration,
+      schemaChanged: experienceSchema.schemaChanged,
+    });
+  }
   const migration = await applyExistingUserInitialItemsMigration();
   if (migration.applied) {
     writeLog("info", "server_migration_applied", {
@@ -995,6 +1287,21 @@ async function start() {
       userCount: migration.userCount,
       itemTypeCount: migration.itemTypeCount,
       updatedRowCount: migration.updatedRowCount,
+    });
+  }
+  const cleanup = await applyPlayerExpInventoryCleanupMigration();
+  if (cleanup.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerExpInventoryCleanupMigration,
+      convertedCount: cleanup.convertedCount,
+      removedCount: cleanup.removedCount,
+    });
+  }
+  const playerExpRepair = await applyMissingInitialPlayerExpRepairMigration();
+  if (playerExpRepair.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: missingInitialPlayerExpRepairMigration,
+      repairedUserCount: playerExpRepair.repairedUserCount,
     });
   }
   const userCount = await prisma.user.count();

@@ -21,21 +21,30 @@ model User {
   firebaseUid  String?           @unique
   nickname     String            @default("NewUser")
   level        Int               @default(1)
+  exp          BigInt            @default(0)
+  progressExp  BigInt            @default(0)
+  lifetimeExp  BigInt            @default(0)
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   characters   PlayerCharacter[]
   items        PlayerItem[]
   armors       PlayerArmor[]
   weapons      PlayerWeapon[]
+  missions     PlayerMission[]
   gachaHistory GachaHistory[]
 }
 
-model Mission {
-  id       Int     @id @default(autoincrement())
-  titleKey Int
-  reward0  String?
-  reward1  String?
-  reward2  String?
+model PlayerMission {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  missionKey     Int
+  progress       Int      @default(0)
+  isClaimed      Boolean  @default(false)
+  cycleStartedAt DateTime
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, missionKey])
+  @@map("PlayerMissions")
 }
 
 model PlayerCharacter {
