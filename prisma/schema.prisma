@@ -31,7 +31,14 @@ model User {
   armors       PlayerArmor[]
   weapons      PlayerWeapon[]
   missions     PlayerMission[]
+  missionLogin PlayerMissionLogin?
   gachaHistory GachaHistory[]
+}
+
+model PlayerMissionLogin {
+  userId Int    @id
+  day    String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PlayerMission {

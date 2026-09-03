@@ -93,6 +93,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 const PLAYER_EXP_ITEM_KEY = 1010003;
+const missions = require("./missions");
 
 function toPlayerExperienceDto(user) {
   return {
@@ -112,6 +113,7 @@ function toUserDto(user) {
     characters: user.characters || [],
     armors: user.armors || [],
     weapons: user.weapons || [],
+    missions: user.missions || [],
   };
 }
 
@@ -186,6 +188,7 @@ async function grantPlayerExperience(tx, userId, amount) {
 }
 
 async function getPlayerData(userId) {
+  const missionData = await prisma.$transaction(tx => missions.list(tx, userId));
   const [items, characters, armors, weapons] = await Promise.all([
     prisma.playerItem.findMany({
       where: { userId },
@@ -212,6 +215,7 @@ async function getPlayerData(userId) {
     }),
   ]);
   return {
+    missions: missionData.missions,
     items,
     characters: characters.map((character) => ({
       ...character,
@@ -319,6 +323,7 @@ app.post("/api/user/login", async (req, res, next) => {
       return res.json({ isNew: true, user: null });
     }
 
+    await prisma.$transaction(tx => missions.recordLogin(tx, user.id));
     const playerData = await getPlayerData(user.id);
     audit(req, "LOGIN_SUCCEEDED", { userId: user.id });
     return res.json({
@@ -377,6 +382,11 @@ app.post("/api/user", async (req, res, next) => {
         include: { characters: true, items: true },
       });
       await grantPlayerExperience(tx, createdUser.id, 100);
+      const missionNow = new Date();
+      await missions.recordLogin(tx, createdUser.id, missionNow);
+      for (const itemKey of itemKeys) {
+        await missions.recordItemAcquired(tx, createdUser.id, itemKey, 100, missionNow);
+      }
       return tx.user.findUnique({
         where: { id: createdUser.id },
         include: { characters: true, items: true },
@@ -456,6 +466,7 @@ app.post("/api/item/acquire", async (req, res, next) => {
           },
         });
       }
+      await missions.recordItemAcquired(tx, request.userId, request.itemKey, request.quantity);
       return { type: "item" };
     });
 
@@ -1037,6 +1048,32 @@ app.get("/api/version", async (req, res, next) => {
   }
 });
 
+for (const operation of ["list", "claim"]) {
+  app.post(`/api/mission/${operation}`, async (req, res, next) => {
+    try {
+      const userId = Number(req.body?.userId);
+      const missionKey = Number(req.body?.missionKey);
+      if (!Number.isSafeInteger(userId) || userId <= 0) return res.status(400).json({ error: "valid userId required" });
+      if (operation === "claim" && (!Number.isSafeInteger(missionKey) || missionKey <= 0)) {
+        return res.status(400).json({ error: "valid missionKey required" });
+      }
+      const now = new Date();
+      const result = await prisma.$transaction(tx => operation === "list"
+        ? missions.list(tx, userId, now)
+        : missions.claim(tx, userId, missionKey, grantPlayerExperience, now));
+      audit(req, operation === "claim" ? "MISSION_REWARD_CLAIMED" : "MISSIONS_LISTED",
+        { userId, ...(operation === "claim" ? { missionKey, exp: result.exp, rewards: result.rewards } : {}) });
+      return res.json(result);
+    } catch (error) {
+      if (error.missionStatus) {
+        audit(req, "MISSION_REQUEST_REJECTED", { operation, reason: error.message });
+        return res.status(error.missionStatus).json({ error: error.message });
+      }
+      return next(error);
+    }
+  });
+}
+
 app.use((req, res) => {
   res.status(404).json({ error: "not found" });
 });
@@ -1267,6 +1304,7 @@ async function applyMissingInitialPlayerExpRepairMigration() {
 }
 
 async function start() {
+  await missions.initialize(prisma);
   const missionsSchema = await applyPlayerMissionsSchemaMigration();
   if (missionsSchema.applied) {
     writeLog("info", "server_migration_applied", {
