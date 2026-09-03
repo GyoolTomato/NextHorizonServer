@@ -1,0 +1,14 @@
+{"timestamp":"2026-09-02T22:11:03.483+09:00","level":"info","event":"database_ready","userCount":1}
+{"timestamp":"2026-09-02T22:11:03.505+09:00","level":"info","event":"server_started","port":3099}
+{"timestamp":"2026-09-02T22:11:16.247+09:00","level":"info","event":"http_request","requestId":"396c24cb-27e5-4250-8db8-bfc83490d239","method":"GET","path":"/api/version","statusCode":200,"durationMs":22.34,"ip":"192.168.0.1"}
+{"timestamp":"2026-09-02T22:11:20.353+09:00","level":"info","event":"audit","requestId":"a2a3d1c8-0055-49f1-8103-ba97bb91aa6b","action":"LOGIN_SUCCEEDED","userId":1}
+{"timestamp":"2026-09-02T22:11:20.355+09:00","level":"info","event":"http_request","requestId":"a2a3d1c8-0055-49f1-8103-ba97bb91aa6b","method":"POST","path":"/api/user/login","statusCode":200,"durationMs":262.88,"ip":"192.168.0.1"}
+{"timestamp":"2026-09-02T22:11:24.145+09:00","level":"info","event":"server_shutting_down","signal":"SIGINT"}
+{"timestamp":"2026-09-02T22:17:40.888+09:00","level":"info","event":"database_ready","userCount":1}
+{"timestamp":"2026-09-02T22:17:40.935+09:00","level":"info","event":"server_started","port":3099}
+{"timestamp":"2026-09-02T22:28:23.224+09:00","level":"info","event":"database_ready","userCount":1}
+{"timestamp":"2026-09-02T22:28:23.283+09:00","level":"info","event":"server_started","port":3099}
+{"timestamp":"2026-09-02T22:41:06.478+09:00","level":"info","event":"database_ready","userCount":1}
+{"timestamp":"2026-09-02T22:41:06.498+09:00","level":"info","event":"server_started","port":3099}
+{"timestamp":"2026-09-02T22:45:22.601+09:00","level":"info","event":"database_ready","userCount":1}
+{"timestamp":"2026-09-02T22:45:22.618+09:00","level":"info","event":"server_started","port":3099}
