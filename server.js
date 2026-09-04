@@ -901,15 +901,12 @@ app.post("/api/character/level-up", async (req, res, next) => {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const [commonValues, levelRows, enumRows, itemRows] = await Promise.all([
+      const [commonValues, levelRows, itemRows] = await Promise.all([
         tx.$queryRawUnsafe(
           'SELECT "key", "value" FROM "_100_CommonValues" WHERE "key" IN (1000001, 1000002)'
         ),
         tx.$queryRawUnsafe(
           'SELECT "level", "expToNextLevel", "totalExpRequired" FROM "_107_CharacterLevel" ORDER BY "level" ASC'
-        ),
-        tx.$queryRawUnsafe(
-          'SELECT rowid AS "eItemType", "ItemType" AS "type" FROM "_000_Global_Enum" WHERE "ItemType" IS NOT NULL'
         ),
         tx.$queryRawUnsafe(
           'SELECT "key", "type" FROM "_101_Items"'
@@ -944,7 +941,7 @@ app.post("/api/character/level-up", async (req, res, next) => {
       const currentLevelRow = levelMap.get(character.level);
       if (!currentLevelRow) throw new Error("character level is missing from _107_CharacterLevel");
 
-      const enumTypeMap = new Map(enumRows.map((row) => [Number(row.eItemType), String(row.type)]));
+      const enumTypeMap = new Map(itemRows.map((row) => [Number(row.key) % 10000, String(row.type)]));
       const itemTypeMap = new Map(itemRows.map((row) => [String(row.type), Number(row.key)]));
       const consumptions = [];
       let addedExp = 0n;

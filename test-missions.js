@@ -45,6 +45,10 @@ async function main() {
     const localId = `mission-test-${Date.now()}`;
     const user = await post("/api/user", { localId, nickname: "MissionTest" }, 201);
     const userId = user.id;
+    const levelUp = await post("/api/character/level-up", {
+      userId, characterKey: user.characters[0].characterKey, eItemTypes: [4], counts: [1],
+    });
+    assert.equal(levelUp.characterKey, user.characters[0].characterKey);
     const get = async () => (await post("/api/mission/list", { userId })).missions;
     let list = await get();
     for (const mission of list) {
