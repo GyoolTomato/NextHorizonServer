@@ -135,8 +135,19 @@ async function claim(tx, userId, missionKey, grantExperience, now = new Date()) 
     itemsByKey.set(itemKey, item);
     await recordItemAcquired(tx, userId, itemKey, quantity, now);
   }
-  const playerExperience = await grantExperience(tx, userId, experience);
+  const grantedExperience = await grantExperience(tx, userId, experience);
   await advance(tx, userId, "WorkCount", 1, now);
+  const finalUser = await tx.user.findUnique({
+    where: { id: userId },
+    select: { level: true, exp: true },
+  });
+  if (!finalUser) throw new Error("user disappeared during mission claim");
+  const playerExperience = {
+    level: finalUser.level,
+    exp: Number(finalUser.exp),
+    grantedExp: grantedExperience.grantedExp,
+    appliedExp: grantedExperience.appliedExp,
+  };
   return { success: true, missionKey, exp: mission.exp, rewards, items: [...itemsByKey.values()], playerExperience,
     ...(await list(tx, userId, now)) };
 }

@@ -67,6 +67,9 @@ async function main() {
       assert.deepEqual(Object.keys(mission).sort(), ["isClaimed", "missionKey", "progress"]);
     }
     assert.equal(claimed.playerExperience.grantedExp, 100);
+    const userAfterClaim = await prisma.user.findUnique({ where: { id: userId } });
+    assert.equal(claimed.playerExperience.level, userAfterClaim.level);
+    assert.equal(claimed.playerExperience.exp, Number(userAfterClaim.exp));
     assert(!("progressExp" in claimed.playerExperience));
     assert(!("lifetimeExp" in claimed.playerExperience));
     assert.equal(claimed.missions.find(m => m.missionKey === 1040006).progress, 1);
