@@ -34,9 +34,9 @@ async function main() {
       await new Promise(r => setTimeout(r, 100));
     }
     assert(ready, output);
-    async function post(route, body, expected = 200) {
+    async function post(route, body, expected = 200, method = "POST") {
       const res = await fetch(`http://127.0.0.1:3198${route}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       const json = await res.json();
       assert.equal(res.status, expected, JSON.stringify(json));
@@ -45,6 +45,13 @@ async function main() {
     const localId = `mission-test-${Date.now()}`;
     const user = await post("/api/user", { localId, nickname: "MissionTest" }, 201);
     const userId = user.id;
+    assert.match(user.uid, /^NH\d{6,}$/);
+    let profile = await post("/api/player-info", { userId });
+    assert.equal(profile.uid, user.uid);
+    assert.equal(profile.bio, "");
+    profile = await post("/api/player-info/bio", { userId, bio: "  Hello Horizon  " }, 200, "PATCH");
+    assert.equal(profile.bio, "Hello Horizon");
+    await post("/api/player-info/bio", { userId, bio: "가".repeat(201) }, 400, "PATCH");
     const levelUp = await post("/api/character/level-up", {
       userId, characterKey: user.characters[0].characterKey, eItemTypes: [4], counts: [1],
     });
@@ -70,6 +77,8 @@ async function main() {
     const userAfterClaim = await prisma.user.findUnique({ where: { id: userId } });
     assert.equal(claimed.playerExperience.level, userAfterClaim.level);
     assert.equal(claimed.playerExperience.exp, Number(userAfterClaim.exp));
+    assert.equal(claimed.playerExperience.uid, user.uid);
+    assert.equal(claimed.playerExperience.createdAt, user.createdAt);
     assert(!("progressExp" in claimed.playerExperience));
     assert(!("lifetimeExp" in claimed.playerExperience));
     assert.equal(claimed.missions.find(m => m.missionKey === 1040006).progress, 1);
@@ -79,7 +88,7 @@ async function main() {
     assert.equal((await get()).find(m => m.missionKey === 1040006).progress, 2);
 
     // Deterministic reset and daily login deduplication, including weekly rollover.
-    const clockUser = await prisma.user.create({ data: { localId: localId + "-clock" } });
+    const clockUser = await prisma.user.create({ data: { uid: `TEST-${localId}`, localId: localId + "-clock" } });
     const sunday = new Date("2026-09-06T10:00:00Z"), monday = new Date("2026-09-06T19:00:00Z");
     await prisma.$transaction(tx => missions.recordLogin(tx, clockUser.id, sunday));
     await prisma.$transaction(tx => missions.recordLogin(tx, clockUser.id, sunday));

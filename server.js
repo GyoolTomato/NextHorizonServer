@@ -97,17 +97,22 @@ const missions = require("./missions");
 
 function toPlayerExperienceDto(user) {
   return {
+    uid: user.uid,
     level: user.level,
     exp: Number(user.exp),
+    createdAt: user.createdAt,
   };
 }
 
 function toUserDto(user) {
   return {
     id: user.id,
+    uid: user.uid,
     localId: user.localId,
     firebaseUid: user.firebaseUid,
     nickname: user.nickname,
+    bio: user.bio,
+    createdAt: user.createdAt,
     ...toPlayerExperienceDto(user),
     items: user.items || [],
     characters: user.characters || [],
@@ -115,6 +120,25 @@ function toUserDto(user) {
     weapons: user.weapons || [],
     missions: user.missions || [],
   };
+}
+
+function validateBio(value) {
+  if (value == null) return { bio: "" };
+  if (typeof value !== "string") return { error: "bio must be a string" };
+  const bio = value.trim();
+  if ([...bio].length > 200) return { error: "bio must be 200 characters or fewer" };
+  return { bio };
+}
+
+async function createNextUid(tx) {
+  const rows = await tx.$queryRawUnsafe(
+    'SELECT MAX(CAST(SUBSTR("uid", 3) AS INTEGER)) AS "lastNumber" FROM "User" WHERE "uid" GLOB \'NH[0-9]*\''
+  );
+  const lastNumber = Number(rows[0]?.lastNumber ?? 99999);
+  if (!Number.isSafeInteger(lastNumber) || lastNumber < 99999 || lastNumber >= 999999999) {
+    throw new Error("invalid or exhausted user uid sequence");
+  }
+  return `NH${lastNumber + 1}`;
 }
 
 async function grantPlayerExperience(tx, userId, amount) {
@@ -353,6 +377,7 @@ app.post("/api/user", async (req, res, next) => {
     }
 
     const user = await prisma.$transaction(async (tx) => {
+      const uid = await createNextUid(tx);
       const itemRows = await tx.$queryRawUnsafe(
         'SELECT "key" FROM "_101_Items" ORDER BY "key" ASC'
       );
@@ -366,6 +391,7 @@ app.post("/api/user", async (req, res, next) => {
       const createdUser = await tx.user.create({
         data: {
           localId,
+          uid,
           firebaseUid,
           nickname: nicknameResult.nickname,
           characters: {
@@ -423,6 +449,47 @@ app.patch("/api/user/nickname", async (req, res, next) => {
     });
     audit(req, "NICKNAME_CHANGED", { userId: user.id });
     return res.json(toUserDto(user));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/player-info", async (req, res, next) => {
+  try {
+    const userId = Number(req.body?.userId);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: "valid userId required" });
+    }
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { uid: true, nickname: true, level: true, bio: true, createdAt: true },
+    });
+    if (!user) return res.status(404).json({ error: "user not found" });
+    audit(req, "PLAYER_INFO_VIEWED", { userId });
+    return res.json(user);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch("/api/player-info/bio", async (req, res, next) => {
+  try {
+    const userId = Number(req.body?.userId);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: "valid userId required" });
+    }
+    const bioResult = validateBio(req.body?.bio);
+    if (bioResult.error) return res.status(400).json({ error: bioResult.error });
+    if (!await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })) {
+      return res.status(404).json({ error: "user not found" });
+    }
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { bio: bioResult.bio },
+      select: { uid: true, nickname: true, level: true, bio: true, createdAt: true },
+    });
+    audit(req, "PLAYER_BIO_CHANGED", { userId, bioLength: [...user.bio].length });
+    return res.json(user);
   } catch (error) {
     return next(error);
   }
@@ -1092,6 +1159,57 @@ const playerExperienceSchemaMigration = "20260903_player_experience_fields";
 const playerExpInventoryCleanupMigration = "20260903_player_exp_inventory_cleanup";
 const missingInitialPlayerExpRepairMigration = "20260903_missing_initial_player_exp_repair_v2";
 const playerMissionsSchemaMigration = "20260903_player_missions_schema";
+const playerProfileSchemaMigration = "20260907_player_profile_uid_bio";
+
+async function applyPlayerProfileSchemaMigration() {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "__ServerMigration" ("key" TEXT PRIMARY KEY, "appliedAt" TEXT NOT NULL)'
+    );
+    const columns = await tx.$queryRawUnsafe('PRAGMA table_info("User")');
+    const columnNames = new Set(columns.map(column => String(column.name)));
+    let schemaChanged = false;
+    if (!columnNames.has("uid")) {
+      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "uid" TEXT');
+      schemaChanged = true;
+    }
+    if (!columnNames.has("bio")) {
+      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "bio" TEXT NOT NULL DEFAULT \'\'');
+      schemaChanged = true;
+    }
+    if (!columnNames.has("memo")) {
+      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "memo" TEXT NOT NULL DEFAULT \'\'');
+      schemaChanged = true;
+    }
+    const users = await tx.$queryRawUnsafe('SELECT "id", "uid" FROM "User" ORDER BY "createdAt", "id"');
+    let nextNumber = 100000;
+    for (const user of users) {
+      if (typeof user.uid === "string" && /^NH\d+$/.test(user.uid)) {
+        nextNumber = Math.max(nextNumber, Number(user.uid.slice(2)) + 1);
+        continue;
+      }
+      while (await tx.$queryRawUnsafe('SELECT 1 FROM "User" WHERE "uid" = ?', `NH${nextNumber}`).then(rows => rows.length)) {
+        nextNumber += 1;
+      }
+      await tx.$executeRawUnsafe('UPDATE "User" SET "uid" = ? WHERE "id" = ?', `NH${nextNumber}`, user.id);
+      nextNumber += 1;
+    }
+    await tx.$executeRawUnsafe('CREATE UNIQUE INDEX IF NOT EXISTS "User_uid_key" ON "User"("uid")');
+    await tx.$executeRawUnsafe(
+      'CREATE TRIGGER IF NOT EXISTS "User_uid_required_insert" BEFORE INSERT ON "User" ' +
+      'WHEN NEW."uid" IS NULL OR NEW."uid" = \'\' BEGIN SELECT RAISE(ABORT, \'uid required\'); END'
+    );
+    await tx.$executeRawUnsafe(
+      'CREATE TRIGGER IF NOT EXISTS "User_uid_required_update" BEFORE UPDATE OF "uid" ON "User" ' +
+      'WHEN NEW."uid" IS NULL OR NEW."uid" = \'\' BEGIN SELECT RAISE(ABORT, \'uid required\'); END'
+    );
+    await tx.$executeRawUnsafe(
+      'INSERT OR IGNORE INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerProfileSchemaMigration
+    );
+    return { applied: schemaChanged, updatedUserCount: users.filter(user => !user.uid).length };
+  });
+}
 
 async function applyPlayerMissionsSchemaMigration() {
   return prisma.$transaction(async (tx) => {
@@ -1302,6 +1420,13 @@ async function applyMissingInitialPlayerExpRepairMigration() {
 
 async function start() {
   await missions.initialize(prisma);
+  const profileSchema = await applyPlayerProfileSchemaMigration();
+  if (profileSchema.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerProfileSchemaMigration,
+      updatedUserCount: profileSchema.updatedUserCount,
+    });
+  }
   const missionsSchema = await applyPlayerMissionsSchemaMigration();
   if (missionsSchema.applied) {
     writeLog("info", "server_migration_applied", {

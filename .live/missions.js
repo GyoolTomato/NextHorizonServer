@@ -139,12 +139,14 @@ async function claim(tx, userId, missionKey, grantExperience, now = new Date()) 
   await advance(tx, userId, "WorkCount", 1, now);
   const finalUser = await tx.user.findUnique({
     where: { id: userId },
-    select: { level: true, exp: true },
+    select: { uid: true, level: true, exp: true, createdAt: true },
   });
   if (!finalUser) throw new Error("user disappeared during mission claim");
   const playerExperience = {
+    uid: finalUser.uid,
     level: finalUser.level,
     exp: Number(finalUser.exp),
+    createdAt: finalUser.createdAt,
     grantedExp: grantedExperience.grantedExp,
     appliedExp: grantedExperience.appliedExp,
   };
