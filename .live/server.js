@@ -6,6 +6,8 @@ const { appendFileSync, mkdirSync } = require("fs");
 const path = require("path");
 const { PrismaClient } = require("@prisma/client");
 const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
+const { initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -16,6 +18,9 @@ const port = Number(process.env.PORT || 3000);
 const adapter = new PrismaBetterSqlite3({ url: databaseUrl });
 const prisma = new PrismaClient({ adapter });
 const app = express();
+const firebaseApp = initializeApp({
+  projectId: process.env.FIREBASE_PROJECT_ID || "nexthorizon-65eae",
+});
 const logDirectory = path.join(__dirname, ".logs");
 
 mkdirSync(logDirectory, { recursive: true });
@@ -92,6 +97,25 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+app.use(async (req, res, next) => {
+  try {
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, "userId")) {
+      delete req.body.userId;
+    }
+
+    const uid = String(req.body?.uid || "").trim();
+    if (!uid) return next();
+
+    const user = await prisma.user.findUnique({ where: { uid }, select: { id: true } });
+    if (!user) return res.status(404).json({ error: "user not found" });
+
+    req.body.userId = user.id;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+});
+
 const PLAYER_EXP_ITEM_KEY = 1010003;
 const missions = require("./missions");
 
@@ -104,16 +128,21 @@ function toPlayerExperienceDto(user) {
   };
 }
 
-function toUserDto(user) {
+function toPlayerInfoDto(user) {
   return {
-    id: user.id,
     uid: user.uid,
-    localId: user.localId,
-    firebaseUid: user.firebaseUid,
     nickname: user.nickname,
     bio: user.bio,
     createdAt: user.createdAt,
-    ...toPlayerExperienceDto(user),
+    level: user.level,
+    exp: Number(user.exp),
+    portrait: user.portrait,
+  };
+}
+
+function toUserDto(user) {
+  return {
+    playerInfo: toPlayerInfoDto(user),
     items: user.items || [],
     characters: user.characters || [],
     armors: user.armors || [],
@@ -257,6 +286,21 @@ function parseUserRequest(req) {
   };
 }
 
+async function verifyExternalFirebaseToken(req) {
+  const firebaseToken = String(req.body?.firebaseToken || "").trim();
+  if (!firebaseToken) throw Object.assign(new Error("firebaseToken required"), { statusCode: 400 });
+  let decoded;
+  try {
+    decoded = await getAuth(firebaseApp).verifyIdToken(firebaseToken);
+  } catch {
+    throw Object.assign(new Error("invalid Firebase ID token"), { statusCode: 401 });
+  }
+  if (decoded.firebase?.sign_in_provider === "anonymous") {
+    throw Object.assign(new Error("anonymous Firebase accounts are not allowed"), { statusCode: 401 });
+  }
+  return decoded.uid;
+}
+
 function validateNickname(value) {
   const nickname = String(value || "").trim();
   if (nickname.length < 2 || nickname.length > 16) {
@@ -321,26 +365,12 @@ app.get("/health", async (req, res, next) => {
 // New API: checks whether a local account exists without creating NewUser.
 app.post("/api/user/login", async (req, res, next) => {
   try {
-    const { localId, firebaseUid } = parseUserRequest(req);
+    const { localId } = parseUserRequest(req);
     if (!localId) {
       return res.status(400).json({ error: "localId required" });
     }
 
-    const user = await prisma.$transaction(async (tx) => {
-      const localUser = await tx.user.findUnique({ where: { localId } });
-      if (localUser) {
-        return firebaseUid
-          ? tx.user.update({ where: { id: localUser.id }, data: { firebaseUid } })
-          : localUser;
-      }
-
-      if (!firebaseUid) return null;
-
-      const firebaseUser = await tx.user.findUnique({ where: { firebaseUid } });
-      return firebaseUser
-        ? tx.user.update({ where: { id: firebaseUser.id }, data: { localId } })
-        : null;
-    });
+    const user = await prisma.user.findUnique({ where: { localId } });
 
     if (!user) {
       audit(req, "LOGIN_NEW_USER_REQUIRED");
@@ -359,9 +389,84 @@ app.post("/api/user/login", async (req, res, next) => {
   }
 });
 
+app.post("/api/auth/firebase", async (req, res, next) => {
+  try {
+    const firebaseUid = await verifyExternalFirebaseToken(req);
+    const user = await prisma.user.findUnique({ where: { firebaseUid } });
+    if (!user) {
+      audit(req, "FIREBASE_LOGIN_NEW_USER_REQUIRED");
+      return res.json({ isNew: true, user: null });
+    }
+    await prisma.$transaction(tx => missions.recordLogin(tx, user.id));
+    const playerData = await getPlayerData(user.id);
+    audit(req, "FIREBASE_LOGIN_SUCCEEDED", { userId: user.id });
+    return res.json({ isNew: false, user: toUserDto({ ...user, ...playerData }) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/auth/firebase/create", async (req, res, next) => {
+  try {
+    const firebaseUid = await verifyExternalFirebaseToken(req);
+    const nicknameResult = validateNickname(req.body?.nickname);
+    if (nicknameResult.error) return res.status(400).json({ error: nicknameResult.error });
+    if (await prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } })) {
+      return res.status(409).json({ error: "Firebase account already exists" });
+    }
+    const user = await prisma.$transaction(async (tx) => {
+      const uid = await createNextUid(tx);
+      const rows = await tx.$queryRawUnsafe('SELECT "key" FROM "_101_Items" ORDER BY "key" ASC');
+      const itemKeys = rows.map(row => Number(row.key)).filter(key => key !== PLAYER_EXP_ITEM_KEY);
+      const created = await tx.user.create({
+        data: {
+          uid, localId: null, firebaseUid, nickname: nicknameResult.nickname,
+          characters: { create: [
+            { characterKey: 1020001, stack: 1 },
+            { characterKey: 1020002, stack: 1 },
+            { characterKey: 1020003, stack: 1 },
+          ] },
+          items: { create: itemKeys.map(itemKey => ({ itemKey, quantity: 100 })) },
+        },
+      });
+      await grantPlayerExperience(tx, created.id, 100);
+      const now = new Date();
+      await missions.recordLogin(tx, created.id, now);
+      for (const itemKey of itemKeys) await missions.recordItemAcquired(tx, created.id, itemKey, 100, now);
+      return tx.user.findUnique({ where: { id: created.id } });
+    });
+    const playerData = await getPlayerData(user.id);
+    audit(req, "FIREBASE_USER_CREATED", { userId: user.id });
+    return res.status(201).json(toUserDto({ ...user, ...playerData }));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/auth/link", async (req, res, next) => {
+  try {
+    const firebaseUid = await verifyExternalFirebaseToken(req);
+    const userId = Number(req.body?.userId);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: "valid uid required" });
+    }
+    const linked = await prisma.$transaction(async (tx) => {
+      const existing = await tx.user.findUnique({ where: { firebaseUid }, select: { id: true } });
+      if (existing && existing.id !== userId) {
+        throw Object.assign(new Error("Firebase account already linked"), { statusCode: 409 });
+      }
+      return tx.user.update({ where: { id: userId }, data: { firebaseUid, localId: null } });
+    });
+    audit(req, "FIREBASE_ACCOUNT_LINKED", { userId: linked.id });
+    return res.json(toUserDto(linked));
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post("/api/user", async (req, res, next) => {
   try {
-    const { localId, firebaseUid } = parseUserRequest(req);
+    const { localId } = parseUserRequest(req);
     if (!localId) {
       return res.status(400).json({ error: "localId required" });
     }
@@ -392,7 +497,7 @@ app.post("/api/user", async (req, res, next) => {
         data: {
           localId,
           uid,
-          firebaseUid,
+          firebaseUid: null,
           nickname: nicknameResult.nickname,
           characters: {
             create: [
@@ -428,9 +533,9 @@ app.post("/api/user", async (req, res, next) => {
 
 app.patch("/api/user/nickname", async (req, res, next) => {
   try {
-    const localId = String(req.body?.localId || "").trim();
-    if (!localId) {
-      return res.status(400).json({ error: "localId required" });
+    const userId = Number(req.body?.userId);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: "valid uid required" });
     }
 
     const nicknameResult = validateNickname(req.body?.nickname);
@@ -438,7 +543,7 @@ app.patch("/api/user/nickname", async (req, res, next) => {
       return res.status(400).json({ error: nicknameResult.error });
     }
 
-    const existingUser = await prisma.user.findUnique({ where: { localId } });
+    const existingUser = await prisma.user.findUnique({ where: { id: userId } });
     if (!existingUser) {
       return res.status(404).json({ error: "user not found" });
     }
@@ -462,7 +567,7 @@ app.post("/api/player-info", async (req, res, next) => {
     }
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { uid: true, nickname: true, level: true, bio: true, createdAt: true },
+      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, bio: true, createdAt: true },
     });
     if (!user) return res.status(404).json({ error: "user not found" });
     audit(req, "PLAYER_INFO_VIEWED", { userId });
@@ -486,11 +591,40 @@ app.patch("/api/player-info/bio", async (req, res, next) => {
     const user = await prisma.user.update({
       where: { id: userId },
       data: { bio: bioResult.bio },
-      select: { uid: true, nickname: true, level: true, bio: true, createdAt: true },
+      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, bio: true, createdAt: true },
     });
     audit(req, "PLAYER_BIO_CHANGED", { userId, bioLength: [...user.bio].length });
     return res.json(user);
   } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch("/api/player-info/portrait", async (req, res, next) => {
+  try {
+    const userId = Number(req.body?.userId);
+    const portrait = String(req.body?.portrait || "").trim();
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: "valid uid required" });
+    }
+    if (!portrait) {
+      return res.status(400).json({ error: "valid portrait required" });
+    }
+    const rows = await prisma.$queryRawUnsafe(
+      'SELECT "model" FROM "_102_Character" WHERE "model" = ? LIMIT 1', portrait
+    );
+    if (rows.length === 0) {
+      return res.status(400).json({ error: "portrait model not found in _102_Character" });
+    }
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { portrait },
+      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, bio: true, createdAt: true },
+    });
+    audit(req, "PLAYER_PORTRAIT_CHANGED", { userId, portrait });
+    return res.json({ ...user, exp: Number(user.exp) });
+  } catch (error) {
+    if (error?.code === "P2025") return res.status(404).json({ error: "user not found" });
     return next(error);
   }
 });
@@ -1151,7 +1285,8 @@ app.use((error, req, res, next) => {
     errorMessage: error?.message || String(error),
     stack: error?.stack,
   });
-  res.status(500).json({ error: "internal server error" });
+  const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+  res.status(statusCode).json({ error: statusCode < 500 ? error.message : "internal server error" });
 });
 
 const existingUserInitialItemsMigration = "20260903_existing_users_add_all_items_100";

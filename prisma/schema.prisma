@@ -18,7 +18,7 @@ model Version {
 model User {
   id           Int               @id @default(autoincrement())
   uid          String            @unique
-  localId      String            @unique
+  localId      String?           @unique
   firebaseUid  String?           @unique
   nickname     String            @default("NewUser")
   bio          String            @default("")
@@ -26,6 +26,7 @@ model User {
   exp          BigInt            @default(0)
   progressExp  BigInt            @default(0)
   lifetimeExp  BigInt            @default(0)
+  portrait     String            @default("Utc")
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   memo         String            @default("")
