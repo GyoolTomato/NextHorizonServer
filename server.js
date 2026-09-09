@@ -1315,6 +1315,16 @@ async function applyPlayerProfileSchemaMigration() {
       await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "introduction" TEXT NOT NULL DEFAULT \'\'');
       schemaChanged = true;
     }
+    if (!columnNames.has("portrait")) {
+      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "portrait" TEXT NOT NULL DEFAULT \'Utc\'');
+      schemaChanged = true;
+    } else {
+      await tx.$executeRawUnsafe(
+        'UPDATE "User" SET "portrait" = COALESCE(' +
+        '(SELECT "model" FROM "_102_Character" WHERE "key" = CAST("User"."portrait" AS INTEGER)), ' +
+        'CAST("portrait" AS TEXT), \'Utc\') WHERE typeof("portrait") != \'text\''
+      );
+    }
     if (!columnNames.has("memo")) {
       await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "memo" TEXT NOT NULL DEFAULT \'\'');
       schemaChanged = true;
