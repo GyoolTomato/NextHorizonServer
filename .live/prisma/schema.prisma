@@ -21,7 +21,7 @@ model User {
   localId      String?           @unique
   firebaseUid  String?           @unique
   nickname     String            @default("NewUser")
-  bio          String            @default("")
+  introduction String            @default("")
   level        Int               @default(1)
   exp          BigInt            @default(0)
   progressExp  BigInt            @default(0)

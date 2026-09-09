@@ -132,7 +132,7 @@ function toPlayerInfoDto(user) {
   return {
     uid: user.uid,
     nickname: user.nickname,
-    bio: user.bio,
+    introduction: user.introduction,
     createdAt: user.createdAt,
     level: user.level,
     exp: Number(user.exp),
@@ -151,12 +151,12 @@ function toUserDto(user) {
   };
 }
 
-function validateBio(value) {
-  if (value == null) return { bio: "" };
-  if (typeof value !== "string") return { error: "bio must be a string" };
-  const bio = value.trim();
-  if ([...bio].length > 200) return { error: "bio must be 200 characters or fewer" };
-  return { bio };
+function validateIntroduction(value) {
+  if (value == null) return { introduction: "" };
+  if (typeof value !== "string") return { error: "introduction must be a string" };
+  const introduction = value.trim();
+  if ([...introduction].length > 200) return { error: "introduction must be 200 characters or fewer" };
+  return { introduction };
 }
 
 async function createNextUid(tx) {
@@ -567,34 +567,34 @@ app.post("/api/player-info", async (req, res, next) => {
     }
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, bio: true, createdAt: true },
+      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, introduction: true, createdAt: true },
     });
     if (!user) return res.status(404).json({ error: "user not found" });
     audit(req, "PLAYER_INFO_VIEWED", { userId });
-    return res.json(user);
+    return res.json({ ...user, exp: Number(user.exp) });
   } catch (error) {
     return next(error);
   }
 });
 
-app.patch("/api/player-info/bio", async (req, res, next) => {
+app.patch("/api/player-info/introduction", async (req, res, next) => {
   try {
     const userId = Number(req.body?.userId);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
       return res.status(400).json({ error: "valid userId required" });
     }
-    const bioResult = validateBio(req.body?.bio);
-    if (bioResult.error) return res.status(400).json({ error: bioResult.error });
+    const introductionResult = validateIntroduction(req.body?.introduction);
+    if (introductionResult.error) return res.status(400).json({ error: introductionResult.error });
     if (!await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })) {
       return res.status(404).json({ error: "user not found" });
     }
     const user = await prisma.user.update({
       where: { id: userId },
-      data: { bio: bioResult.bio },
-      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, bio: true, createdAt: true },
+      data: { introduction: introductionResult.introduction },
+      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, introduction: true, createdAt: true },
     });
-    audit(req, "PLAYER_BIO_CHANGED", { userId, bioLength: [...user.bio].length });
-    return res.json(user);
+    audit(req, "PLAYER_INTRODUCTION_CHANGED", { userId, introductionLength: [...user.introduction].length });
+    return res.json({ ...user, exp: Number(user.exp) });
   } catch (error) {
     return next(error);
   }
@@ -619,7 +619,7 @@ app.patch("/api/player-info/portrait", async (req, res, next) => {
     const user = await prisma.user.update({
       where: { id: userId },
       data: { portrait },
-      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, bio: true, createdAt: true },
+      select: { uid: true, nickname: true, level: true, exp: true, portrait: true, introduction: true, createdAt: true },
     });
     audit(req, "PLAYER_PORTRAIT_CHANGED", { userId, portrait });
     return res.json({ ...user, exp: Number(user.exp) });
@@ -1294,7 +1294,7 @@ const playerExperienceSchemaMigration = "20260903_player_experience_fields";
 const playerExpInventoryCleanupMigration = "20260903_player_exp_inventory_cleanup";
 const missingInitialPlayerExpRepairMigration = "20260903_missing_initial_player_exp_repair_v2";
 const playerMissionsSchemaMigration = "20260903_player_missions_schema";
-const playerProfileSchemaMigration = "20260907_player_profile_uid_bio";
+const playerProfileSchemaMigration = "20260909_player_profile_introduction";
 
 async function applyPlayerProfileSchemaMigration() {
   return prisma.$transaction(async (tx) => {
@@ -1308,8 +1308,11 @@ async function applyPlayerProfileSchemaMigration() {
       await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "uid" TEXT');
       schemaChanged = true;
     }
-    if (!columnNames.has("bio")) {
-      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "bio" TEXT NOT NULL DEFAULT \'\'');
+    if (!columnNames.has("introduction") && columnNames.has("bio")) {
+      await tx.$executeRawUnsafe('ALTER TABLE "User" RENAME COLUMN "bio" TO "introduction"');
+      schemaChanged = true;
+    } else if (!columnNames.has("introduction")) {
+      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "introduction" TEXT NOT NULL DEFAULT \'\'');
       schemaChanged = true;
     }
     if (!columnNames.has("memo")) {
