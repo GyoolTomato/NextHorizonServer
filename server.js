@@ -148,6 +148,7 @@ function toUserDto(user) {
     armors: user.armors || [],
     weapons: user.weapons || [],
     missions: user.missions || [],
+    stageClears: user.stageClears || [],
   };
 }
 
@@ -242,7 +243,7 @@ async function grantPlayerExperience(tx, userId, amount) {
 
 async function getPlayerData(userId) {
   const missionData = await prisma.$transaction(tx => missions.list(tx, userId));
-  const [items, characters, armors, weapons] = await Promise.all([
+  const [items, characters, armors, weapons, stageClears] = await Promise.all([
     prisma.playerItem.findMany({
       where: { userId },
       select: { userId: true, itemKey: true, quantity: true },
@@ -266,6 +267,11 @@ async function getPlayerData(userId) {
       select: { id: true, userId: true, weaponKey: true, level: true, exp: true, equipedCharacter: true },
       orderBy: { weaponKey: "asc" },
     }),
+    prisma.playerStageClear.findMany({
+      where: { userId },
+      select: { stageKey: true, isCond1: true, isCond2: true, isCond3: true },
+      orderBy: { stageKey: "asc" },
+    }),
   ]);
   return {
     missions: missionData.missions,
@@ -276,6 +282,7 @@ async function getPlayerData(userId) {
     })),
     armors,
     weapons,
+    stageClears,
   };
 }
 
@@ -1272,6 +1279,55 @@ for (const operation of ["list", "claim"]) {
   });
 }
 
+app.post("/api/stage/clear", async (req, res, next) => {
+  try {
+    const userId = Number(req.body?.userId);
+    const stageKey = Number(req.body?.stageKey);
+    const conditions = req.body?.conditions;
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: "valid userId required" });
+    }
+    if (!Number.isSafeInteger(stageKey) || stageKey <= 0) {
+      return res.status(400).json({ error: "valid stageKey required" });
+    }
+    if (!Array.isArray(conditions) || conditions.some(condition =>
+      !Number.isSafeInteger(condition) || condition < 1 || condition > 3)) {
+      return res.status(400).json({ error: "conditions must be an array containing only 1, 2, or 3" });
+    }
+    const stageRows = await prisma.$queryRawUnsafe(
+      'SELECT "key" FROM "_700_StageList" WHERE "key" = ? LIMIT 1',
+      stageKey
+    );
+    if (stageRows.length === 0) {
+      return res.status(400).json({ error: "stageKey not found in _700_StageList" });
+    }
+
+    const achieved = new Set(conditions);
+    const createData = {
+      userId,
+      stageKey,
+      isCond1: achieved.has(1),
+      isCond2: achieved.has(2),
+      isCond3: achieved.has(3),
+    };
+    const updateData = {};
+    if (achieved.has(1)) updateData.isCond1 = true;
+    if (achieved.has(2)) updateData.isCond2 = true;
+    if (achieved.has(3)) updateData.isCond3 = true;
+
+    const stageClear = await prisma.playerStageClear.upsert({
+      where: { userId_stageKey: { userId, stageKey } },
+      create: createData,
+      update: updateData,
+      select: { stageKey: true, isCond1: true, isCond2: true, isCond3: true },
+    });
+    audit(req, "STAGE_CLEARED", { userId, stageKey, conditions: [...achieved] });
+    return res.json(stageClear);
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.use((req, res) => {
   res.status(404).json({ error: "not found" });
 });
@@ -1295,6 +1351,8 @@ const playerExpInventoryCleanupMigration = "20260903_player_exp_inventory_cleanu
 const missingInitialPlayerExpRepairMigration = "20260903_missing_initial_player_exp_repair_v2";
 const playerMissionsSchemaMigration = "20260903_player_missions_schema";
 const playerProfileSchemaMigration = "20260909_player_profile_introduction";
+const playerStageClearSchemaMigration = "20260912_player_stage_clear_schema";
+const playerStageClearShortColumnsMigration = "20260912_player_stage_clear_short_columns";
 
 async function applyPlayerProfileSchemaMigration() {
   return prisma.$transaction(async (tx) => {
@@ -1390,6 +1448,68 @@ async function applyPlayerMissionsSchemaMigration() {
     await tx.$executeRawUnsafe(
       'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
       playerMissionsSchemaMigration
+    );
+    return { applied: true };
+  });
+}
+
+async function applyPlayerStageClearSchemaMigration() {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "__ServerMigration" (' +
+      '"key" TEXT PRIMARY KEY, "appliedAt" TEXT NOT NULL)'
+    );
+    const appliedRows = await tx.$queryRawUnsafe(
+      'SELECT "key" FROM "__ServerMigration" WHERE "key" = ?',
+      playerStageClearSchemaMigration
+    );
+    if (appliedRows.length > 0) return { applied: false };
+
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "PlayerStageClear" (' +
+      '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, ' +
+      '"userId" INTEGER NOT NULL, ' +
+      '"stageKey" INTEGER NOT NULL, ' +
+      '"isCond1" BOOLEAN NOT NULL DEFAULT false, ' +
+      '"isCond2" BOOLEAN NOT NULL DEFAULT false, ' +
+      '"isCond3" BOOLEAN NOT NULL DEFAULT false, ' +
+      'CONSTRAINT "PlayerStageClear_userId_fkey" FOREIGN KEY ("userId") ' +
+      'REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE)'
+    );
+    await tx.$executeRawUnsafe(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "PlayerStageClear_userId_stageKey_key" ' +
+      'ON "PlayerStageClear"("userId", "stageKey")'
+    );
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerStageClearSchemaMigration
+    );
+    return { applied: true };
+  });
+}
+
+async function applyPlayerStageClearShortColumnsMigration() {
+  return prisma.$transaction(async (tx) => {
+    const appliedRows = await tx.$queryRawUnsafe(
+      'SELECT "key" FROM "__ServerMigration" WHERE "key" = ?',
+      playerStageClearShortColumnsMigration
+    );
+    if (appliedRows.length > 0) return { applied: false };
+
+    const columns = await tx.$queryRawUnsafe('PRAGMA table_info("PlayerStageClear")');
+    const columnNames = new Set(columns.map(column => String(column.name)));
+    for (let i = 1; i <= 3; i++) {
+      const oldName = `isCondition${i}Achieved`;
+      const newName = `isCond${i}`;
+      if (columnNames.has(oldName) && !columnNames.has(newName)) {
+        await tx.$executeRawUnsafe(
+          `ALTER TABLE "PlayerStageClear" RENAME COLUMN "${oldName}" TO "${newName}"`
+        );
+      }
+    }
+    await tx.$executeRawUnsafe(
+      'INSERT INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerStageClearShortColumnsMigration
     );
     return { applied: true };
   });
@@ -1579,6 +1699,18 @@ async function start() {
   if (missionsSchema.applied) {
     writeLog("info", "server_migration_applied", {
       migration: playerMissionsSchemaMigration,
+    });
+  }
+  const stageClearSchema = await applyPlayerStageClearSchemaMigration();
+  if (stageClearSchema.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerStageClearSchemaMigration,
+    });
+  }
+  const stageClearShortColumns = await applyPlayerStageClearShortColumnsMigration();
+  if (stageClearShortColumns.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerStageClearShortColumnsMigration,
     });
   }
   const experienceSchema = await applyPlayerExperienceSchemaMigration();
