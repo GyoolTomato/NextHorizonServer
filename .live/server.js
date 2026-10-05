@@ -118,6 +118,7 @@ app.use(async (req, res, next) => {
 
 const PLAYER_EXP_ITEM_KEY = 1010003;
 const missions = require("./missions");
+const { addPlayerArmor, addPlayerWeapon } = require("./equipment");
 
 function toPlayerExperienceDto(user) {
   return {
@@ -259,12 +260,12 @@ async function getPlayerData(userId) {
     }),
     prisma.playerArmor.findMany({
       where: { userId },
-      select: { id: true, userId: true, armorKey: true, level: true, exp: true, equipedCharacter: true },
+      select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       orderBy: { armorKey: "asc" },
     }),
     prisma.playerWeapon.findMany({
       where: { userId },
-      select: { id: true, userId: true, weaponKey: true, level: true, exp: true, equipedCharacter: true },
+      select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       orderBy: { weaponKey: "asc" },
     }),
     prisma.playerStageClear.findMany({
@@ -728,7 +729,7 @@ app.post("/api/armor/list", async (req, res, next) => {
     }
     const armors = await prisma.playerArmor.findMany({
       where: { userId },
-      select: { id: true, userId: true, armorKey: true, level: true, exp: true, equipedCharacter: true },
+      select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       orderBy: { id: "asc" },
     });
     return res.json(armors);
@@ -774,7 +775,7 @@ app.post("/api/armor/equip", async (req, res, next) => {
       const equipped = await tx.playerArmor.update({
         where: { id: playerArmorId },
         data: { equipedCharacter: characterKey },
-        select: { id: true, userId: true, armorKey: true, level: true, exp: true, equipedCharacter: true },
+        select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       });
       return { value: equipped };
     });
@@ -797,7 +798,7 @@ app.post("/api/armor/release", async (req, res, next) => {
     if (!armor) return res.status(400).json({ error: "armor not found" });
     const released = await prisma.playerArmor.update({
       where: { id: playerArmorId }, data: { equipedCharacter: 0 },
-      select: { id: true, userId: true, armorKey: true, level: true, exp: true, equipedCharacter: true },
+      select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
     });
     audit(req, "ARMOR_RELEASED", { userId, playerArmorId, armorKey: released.armorKey });
     return res.json(released);
@@ -815,7 +816,7 @@ app.post("/api/weapon/list", async (req, res, next) => {
     }
     const weapons = await prisma.playerWeapon.findMany({
       where: { userId },
-      select: { id: true, userId: true, weaponKey: true, level: true, exp: true, equipedCharacter: true },
+      select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       orderBy: { id: "asc" },
     });
     return res.json(weapons);
@@ -846,7 +847,7 @@ app.post("/api/weapon/equip", async (req, res, next) => {
       const equipped = await tx.playerWeapon.update({
         where: { id: playerWeaponId },
         data: { equipedCharacter: characterKey },
-        select: { id: true, userId: true, weaponKey: true, level: true, exp: true, equipedCharacter: true },
+        select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       });
       return { value: equipped };
     });
@@ -869,7 +870,7 @@ app.post("/api/weapon/release", async (req, res, next) => {
     if (!weapon) return res.status(400).json({ error: "weapon not found" });
     const released = await prisma.playerWeapon.update({
       where: { id: playerWeaponId }, data: { equipedCharacter: 0 },
-      select: { id: true, userId: true, weaponKey: true, level: true, exp: true, equipedCharacter: true },
+      select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
     });
     audit(req, "WEAPON_RELEASED", { userId, playerWeaponId, weaponKey: released.weaponKey });
     return res.json(released);
@@ -1283,46 +1284,108 @@ app.post("/api/stage/clear", async (req, res, next) => {
   try {
     const userId = Number(req.body?.userId);
     const stageKey = Number(req.body?.stageKey);
-    const conditions = req.body?.conditions;
+    const clearTime = Number(req.body?.clearTime);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
       return res.status(400).json({ error: "valid userId required" });
     }
     if (!Number.isSafeInteger(stageKey) || stageKey <= 0) {
       return res.status(400).json({ error: "valid stageKey required" });
     }
-    if (!Array.isArray(conditions) || conditions.some(condition =>
-      !Number.isSafeInteger(condition) || condition < 1 || condition > 3)) {
-      return res.status(400).json({ error: "conditions must be an array containing only 1, 2, or 3" });
+    if (!Number.isFinite(clearTime) || clearTime < 0) {
+      return res.status(400).json({ error: "clearTime must be a non-negative number" });
     }
-    const stageRows = await prisma.$queryRawUnsafe(
-      'SELECT "key" FROM "_700_StageList" WHERE "key" = ? LIMIT 1',
-      stageKey
-    );
-    if (stageRows.length === 0) {
-      return res.status(400).json({ error: "stageKey not found in _700_StageList" });
-    }
+    const result = await prisma.$transaction(async (tx) => {
+      const stageRows = await tx.$queryRawUnsafe(
+        'SELECT "armorGroup", "weaponGroup" FROM "_700_StageList" WHERE "key" = ? LIMIT 1',
+        stageKey
+      );
+      if (stageRows.length === 0) {
+        throw Object.assign(new Error("stageKey not found in _700_StageList"), { statusCode: 400 });
+      }
 
-    const achieved = new Set(conditions);
-    const createData = {
+      const armorGroupKey = Number(stageRows[0].armorGroup);
+      const weaponGroupKey = Number(stageRows[0].weaponGroup);
+      if (!Number.isSafeInteger(armorGroupKey) || armorGroupKey <= 0) {
+        throw Object.assign(new Error("invalid armorGroup in _700_StageList"), { statusCode: 400 });
+      }
+      if (!Number.isSafeInteger(weaponGroupKey) || weaponGroupKey <= 0) {
+        throw Object.assign(new Error("invalid weaponGroup in _700_StageList"), { statusCode: 400 });
+      }
+
+      const [armorGroups, weaponGroups] = await Promise.all([
+        tx.$queryRawUnsafe('SELECT * FROM "_109_ArmorGroup" WHERE "key" = ? LIMIT 1', armorGroupKey),
+        tx.$queryRawUnsafe('SELECT * FROM "_110_WeaponGroup" WHERE "key" = ? LIMIT 1', weaponGroupKey),
+      ]);
+      if (armorGroups.length === 0) {
+        throw Object.assign(new Error("armorGroup not found in _109_ArmorGroup"), { statusCode: 400 });
+      }
+      if (weaponGroups.length === 0) {
+        throw Object.assign(new Error("weaponGroup not found in _110_WeaponGroup"), { statusCode: 400 });
+      }
+
+      const readRewardKeys = (group, groupName) => {
+        const keys = [];
+        for (let index = 0; index <= 8; index += 1) {
+          const key = Number(group[`rewardKey_${index}`]);
+          if (key === 0) continue;
+          if (!Number.isSafeInteger(key) || key < 0) {
+            throw Object.assign(new Error(`invalid rewardKey_${index} in ${groupName}`), { statusCode: 400 });
+          }
+          keys.push(key);
+        }
+        return keys;
+      };
+      const armorKeys = readRewardKeys(armorGroups[0], "_109_ArmorGroup");
+      const weaponKeys = readRewardKeys(weaponGroups[0], "_110_WeaponGroup");
+
+      const validateEquipmentKeys = async (tableName, keys) => {
+        if (keys.length === 0) return;
+        const uniqueKeys = [...new Set(keys)];
+        const placeholders = uniqueKeys.map(() => "?").join(", ");
+        const rows = await tx.$queryRawUnsafe(
+          `SELECT "key" FROM "${tableName}" WHERE "key" IN (${placeholders})`,
+          ...uniqueKeys
+        );
+        const found = new Set(rows.map(row => Number(row.key)));
+        const missing = uniqueKeys.filter(key => !found.has(key));
+        if (missing.length > 0) {
+          throw Object.assign(
+            new Error(`equipment key not found in ${tableName}: ${missing.join(", ")}`),
+            { statusCode: 400 }
+          );
+        }
+      };
+      await validateEquipmentKeys("_105_Armors", armorKeys);
+      await validateEquipmentKeys("_106_Weapons", weaponKeys);
+
+      const armors = [];
+      for (const armorKey of armorKeys) {
+        armors.push(await addPlayerArmor(tx, {
+          userId, armorKey, level: 1, exp: 0,
+        }));
+      }
+      const weapons = [];
+      for (const weaponKey of weaponKeys) {
+        weapons.push(await addPlayerWeapon(tx, {
+          userId, weaponKey, level: 1, exp: 0,
+        }));
+      }
+      await tx.playerStageClear.upsert({
+        where: { userId_stageKey: { userId, stageKey } },
+        create: { userId, stageKey, clearCount: 1 },
+        update: { clearCount: { increment: 1 } },
+      });
+      return { success: true, armors, weapons };
+    });
+
+    audit(req, "STAGE_REWARDS_GRANTED", {
       userId,
       stageKey,
-      isCond1: achieved.has(1),
-      isCond2: achieved.has(2),
-      isCond3: achieved.has(3),
-    };
-    const updateData = {};
-    if (achieved.has(1)) updateData.isCond1 = true;
-    if (achieved.has(2)) updateData.isCond2 = true;
-    if (achieved.has(3)) updateData.isCond3 = true;
-
-    const stageClear = await prisma.playerStageClear.upsert({
-      where: { userId_stageKey: { userId, stageKey } },
-      create: createData,
-      update: updateData,
-      select: { stageKey: true, isCond1: true, isCond2: true, isCond3: true },
+      clearTime,
+      armorCount: result.armors.length,
+      weaponCount: result.weapons.length,
     });
-    audit(req, "STAGE_CLEARED", { userId, stageKey, conditions: [...achieved] });
-    return res.json(stageClear);
+    return res.json(result);
   } catch (error) {
     return next(error);
   }
@@ -1353,6 +1416,8 @@ const playerMissionsSchemaMigration = "20260903_player_missions_schema";
 const playerProfileSchemaMigration = "20260909_player_profile_introduction";
 const playerStageClearSchemaMigration = "20260912_player_stage_clear_schema";
 const playerStageClearShortColumnsMigration = "20260912_player_stage_clear_short_columns";
+const playerStageClearCountMigration = "20261005_player_stage_clear_count";
+const playerEquipmentSubStatsMigration = "20261005_player_equipment_sub_stats";
 
 async function applyPlayerProfileSchemaMigration() {
   return prisma.$transaction(async (tx) => {
@@ -1473,6 +1538,7 @@ async function applyPlayerStageClearSchemaMigration() {
       '"isCond1" BOOLEAN NOT NULL DEFAULT false, ' +
       '"isCond2" BOOLEAN NOT NULL DEFAULT false, ' +
       '"isCond3" BOOLEAN NOT NULL DEFAULT false, ' +
+      '"clearCount" INTEGER NOT NULL DEFAULT 0, ' +
       'CONSTRAINT "PlayerStageClear_userId_fkey" FOREIGN KEY ("userId") ' +
       'REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE)'
     );
@@ -1512,6 +1578,65 @@ async function applyPlayerStageClearShortColumnsMigration() {
       playerStageClearShortColumnsMigration
     );
     return { applied: true };
+  });
+}
+
+async function applyPlayerStageClearCountMigration() {
+  return prisma.$transaction(async (tx) => {
+    const columns = await tx.$queryRawUnsafe('PRAGMA table_info("PlayerStageClear")');
+    const columnNames = new Set(columns.map(column => String(column.name)));
+    let schemaChanged = false;
+    if (!columnNames.has("clearCount")) {
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "PlayerStageClear" ADD COLUMN "clearCount" INTEGER NOT NULL DEFAULT 0'
+      );
+      schemaChanged = true;
+    }
+    await tx.$executeRawUnsafe(
+      'INSERT OR IGNORE INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerStageClearCountMigration
+    );
+    return { applied: schemaChanged };
+  });
+}
+
+async function applyPlayerEquipmentSubStatsMigration() {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'CREATE TABLE IF NOT EXISTS "__ServerMigration" (' +
+      '"key" TEXT PRIMARY KEY, "appliedAt" TEXT NOT NULL)'
+    );
+    let schemaChanged = false;
+    for (const tableName of ["PlayerArmor", "PlayerWeapon"]) {
+      const columns = await tx.$queryRawUnsafe(`PRAGMA table_info("${tableName}")`);
+      const columnNames = new Set(columns.map(column => String(column.name)));
+      for (const columnName of ["subStat0", "subStat1"]) {
+        if (!columnNames.has(columnName)) {
+          await tx.$executeRawUnsafe(
+            `ALTER TABLE "${tableName}" ADD COLUMN "${columnName}" TEXT NOT NULL DEFAULT ''`
+          );
+          schemaChanged = true;
+        }
+      }
+      await tx.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${tableName}_random_sub_stats"`);
+      await tx.$executeRawUnsafe(
+        `CREATE TRIGGER "${tableName}_random_sub_stats" ` +
+        `AFTER INSERT ON "${tableName}" BEGIN ` +
+        `UPDATE "${tableName}" SET ` +
+        `"subStat0" = CASE WHEN NEW."subStat0" = '' THEN CASE abs(random() % 6) ` +
+        `WHEN 0 THEN 'Avoid' WHEN 1 THEN 'Focus' WHEN 2 THEN 'AtkSpd' ` +
+        `WHEN 3 THEN 'Speed' WHEN 4 THEN 'Crirate' ELSE 'Cridmg' END ELSE NEW."subStat0" END, ` +
+        `"subStat1" = CASE WHEN NEW."subStat1" = '' THEN CASE abs(random() % 6) ` +
+        `WHEN 0 THEN 'Avoid' WHEN 1 THEN 'Focus' WHEN 2 THEN 'AtkSpd' ` +
+        `WHEN 3 THEN 'Speed' WHEN 4 THEN 'Crirate' ELSE 'Cridmg' END ELSE NEW."subStat1" END ` +
+        `WHERE "id" = NEW."id"; END`
+      );
+    }
+    await tx.$executeRawUnsafe(
+      'INSERT OR IGNORE INTO "__ServerMigration" ("key", "appliedAt") VALUES (?, CURRENT_TIMESTAMP)',
+      playerEquipmentSubStatsMigration
+    );
+    return { applied: schemaChanged };
   });
 }
 
@@ -1711,6 +1836,18 @@ async function start() {
   if (stageClearShortColumns.applied) {
     writeLog("info", "server_migration_applied", {
       migration: playerStageClearShortColumnsMigration,
+    });
+  }
+  const stageClearCount = await applyPlayerStageClearCountMigration();
+  if (stageClearCount.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerStageClearCountMigration,
+    });
+  }
+  const equipmentSubStats = await applyPlayerEquipmentSubStatsMigration();
+  if (equipmentSubStats.applied) {
+    writeLog("info", "server_migration_applied", {
+      migration: playerEquipmentSubStatsMigration,
     });
   }
   const experienceSchema = await applyPlayerExperienceSchemaMigration();

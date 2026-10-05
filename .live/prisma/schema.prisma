@@ -66,6 +66,7 @@ model PlayerStageClear {
   isCond1              Boolean @default(false)
   isCond2              Boolean @default(false)
   isCond3              Boolean @default(false)
+  clearCount           Int     @default(0)
   user                 User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, stageKey])
@@ -109,6 +110,8 @@ model PlayerArmor {
   armorKey         Int
   level            Int      @default(1)
   exp              Int      @default(0)
+  subStat0         String   @default("")
+  subStat1         String   @default("")
   equipedCharacter Int      @default(0)
   acquiredAt       DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -133,6 +136,8 @@ model PlayerWeapon {
   weaponKey        Int
   level            Int      @default(1)
   exp              Int      @default(0)
+  subStat0         String   @default("")
+  subStat1         String   @default("")
   equipedCharacter Int      @default(0)
   acquiredAt       DateTime @default(now())
   updatedAt        DateTime @updatedAt
