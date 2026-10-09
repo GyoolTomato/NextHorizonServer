@@ -74,8 +74,26 @@ async function addPlayerWeapon(db, { userId, weaponKey, level, exp, equipCharact
   });
 }
 
+async function grantInitialEquipment(db, userId) {
+  const armors = [];
+  for (let armorKey = 1050001; armorKey <= 1050004; armorKey += 1) {
+    armors.push(await addPlayerArmor(db, {
+      userId, armorKey, level: 1, exp: 0,
+    }));
+  }
+
+  const weapons = [];
+  for (let weaponKey = 1060001; weaponKey <= 1060002; weaponKey += 1) {
+    weapons.push(await addPlayerWeapon(db, {
+      userId, weaponKey, level: 1, exp: 0,
+    }));
+  }
+  return { armors, weapons };
+}
+
 module.exports = {
   EQUIPMENT_SUB_STATS,
   addPlayerArmor,
   addPlayerWeapon,
+  grantInitialEquipment,
 };

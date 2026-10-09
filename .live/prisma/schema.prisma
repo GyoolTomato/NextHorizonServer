@@ -119,13 +119,15 @@ model PlayerArmor {
 }
 
 model Armor {
-  key   Int    @id
-  grade String
-  name  Int
-  desc  Int
-  icon  String
-  type  String
-  value Int
+  key           Int    @id
+  grade         String
+  name          Int
+  desc          Int
+  icon          String
+  type          String
+  mainValueType String
+  mainValue     Int
+  subValue      Int
 
   @@map("_105_Armors")
 }

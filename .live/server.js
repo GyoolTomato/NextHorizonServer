@@ -118,7 +118,7 @@ app.use(async (req, res, next) => {
 
 const PLAYER_EXP_ITEM_KEY = 1010003;
 const missions = require("./missions");
-const { addPlayerArmor, addPlayerWeapon } = require("./equipment");
+const { addPlayerArmor, addPlayerWeapon, grantInitialEquipment } = require("./equipment");
 
 function toPlayerExperienceDto(user) {
   return {
@@ -437,6 +437,7 @@ app.post("/api/auth/firebase/create", async (req, res, next) => {
           items: { create: itemKeys.map(itemKey => ({ itemKey, quantity: 100 })) },
         },
       });
+      await grantInitialEquipment(tx, created.id);
       await grantPlayerExperience(tx, created.id, 100);
       const now = new Date();
       await missions.recordLogin(tx, created.id, now);
@@ -520,6 +521,7 @@ app.post("/api/user", async (req, res, next) => {
         },
         include: { characters: true, items: true },
       });
+      await grantInitialEquipment(tx, createdUser.id);
       await grantPlayerExperience(tx, createdUser.id, 100);
       const missionNow = new Date();
       await missions.recordLogin(tx, createdUser.id, missionNow);
@@ -758,13 +760,19 @@ app.post("/api/armor/equip", async (req, res, next) => {
       });
       if (!playerArmor) return { error: "armor not found" };
 
-      const armorData = await tx.armor.findUnique({ where: { key: playerArmor.armorKey } });
+      const armorData = await tx.armor.findUnique({
+        where: { key: playerArmor.armorKey },
+        select: { type: true },
+      });
       if (!armorData) return { error: "armor data not found" };
 
       const ownedArmors = await tx.playerArmor.findMany({ where: { userId } });
       const sameTypeIds = [];
       for (const ownedArmor of ownedArmors) {
-        const ownedArmorData = await tx.armor.findUnique({ where: { key: ownedArmor.armorKey } });
+        const ownedArmorData = await tx.armor.findUnique({
+          where: { key: ownedArmor.armorKey },
+          select: { type: true },
+        });
         if (ownedArmorData?.type === armorData.type) sameTypeIds.push(ownedArmor.id);
       }
       await tx.playerArmor.updateMany({
