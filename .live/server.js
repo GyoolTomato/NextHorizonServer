@@ -766,7 +766,9 @@ app.post("/api/armor/equip", async (req, res, next) => {
       });
       if (!armorData) return { error: "armor data not found" };
 
-      const ownedArmors = await tx.playerArmor.findMany({ where: { userId } });
+      const ownedArmors = await tx.playerArmor.findMany({
+        where: { userId, equipedCharacter: characterKey },
+      });
       const sameTypeIds = [];
       for (const ownedArmor of ownedArmors) {
         const ownedArmorData = await tx.armor.findUnique({
