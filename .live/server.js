@@ -775,24 +775,36 @@ app.post("/api/armor/equip", async (req, res, next) => {
           where: { key: ownedArmor.armorKey },
           select: { type: true },
         });
-        if (ownedArmorData?.type === armorData.type) sameTypeIds.push(ownedArmor.id);
+        if (ownedArmor.id !== playerArmorId && ownedArmorData?.type === armorData.type) {
+          sameTypeIds.push(ownedArmor.id);
+        }
       }
       await tx.playerArmor.updateMany({
         where: { id: { in: sameTypeIds } },
         data: { equipedCharacter: 0 },
       });
+      const released = sameTypeIds.length > 0
+        ? await tx.playerArmor.findMany({
+          where: { id: { in: sameTypeIds } },
+          select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
+          orderBy: { id: "asc" },
+        })
+        : [];
 
       const equipped = await tx.playerArmor.update({
         where: { id: playerArmorId },
         data: { equipedCharacter: characterKey },
         select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       });
-      return { value: equipped };
+      return { equipped, released };
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
-    audit(req, "ARMOR_EQUIPPED", { userId, playerArmorId, characterKey, armorKey: result.value.armorKey });
-    return res.json(result.value);
+    audit(req, "ARMOR_EQUIPPED", {
+      userId, playerArmorId, characterKey, armorKey: result.equipped.armorKey,
+      releasedIds: result.released.map(armor => armor.id),
+    });
+    return res.json(result);
   } catch (error) {
     return next(error);
   }
@@ -811,7 +823,7 @@ app.post("/api/armor/release", async (req, res, next) => {
       select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
     });
     audit(req, "ARMOR_RELEASED", { userId, playerArmorId, armorKey: released.armorKey });
-    return res.json(released);
+    return res.json({ equipped: null, released: [released] });
   } catch (error) { return next(error); }
 });
 
@@ -853,21 +865,40 @@ app.post("/api/weapon/equip", async (req, res, next) => {
       const playerWeapon = await tx.playerWeapon.findFirst({ where: { id: playerWeaponId, userId } });
       if (!playerWeapon) return { error: "weapon not found" };
 
+      const previousWeapons = await tx.playerWeapon.findMany({
+        where: {
+          userId,
+          equipedCharacter: characterKey,
+          id: { not: playerWeaponId },
+        },
+        select: { id: true },
+      });
+      const releasedIds = previousWeapons.map(weapon => weapon.id);
       await tx.playerWeapon.updateMany({
-        where: { userId, equipedCharacter: characterKey },
+        where: { id: { in: releasedIds } },
         data: { equipedCharacter: 0 },
       });
+      const released = releasedIds.length > 0
+        ? await tx.playerWeapon.findMany({
+          where: { id: { in: releasedIds } },
+          select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
+          orderBy: { id: "asc" },
+        })
+        : [];
       const equipped = await tx.playerWeapon.update({
         where: { id: playerWeaponId },
         data: { equipedCharacter: characterKey },
         select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
       });
-      return { value: equipped };
+      return { equipped, released };
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
-    audit(req, "WEAPON_EQUIPPED", { userId, playerWeaponId, characterKey, weaponKey: result.value.weaponKey });
-    return res.json(result.value);
+    audit(req, "WEAPON_EQUIPPED", {
+      userId, playerWeaponId, characterKey, weaponKey: result.equipped.weaponKey,
+      releasedIds: result.released.map(weapon => weapon.id),
+    });
+    return res.json(result);
   } catch (error) {
     return next(error);
   }
@@ -886,7 +917,7 @@ app.post("/api/weapon/release", async (req, res, next) => {
       select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
     });
     audit(req, "WEAPON_RELEASED", { userId, playerWeaponId, weaponKey: released.weaponKey });
-    return res.json(released);
+    return res.json({ equipped: null, released: [released] });
   } catch (error) { return next(error); }
 });
 
