@@ -853,7 +853,10 @@ app.post("/api/weapon/equip", async (req, res, next) => {
       const playerWeapon = await tx.playerWeapon.findFirst({ where: { id: playerWeaponId, userId } });
       if (!playerWeapon) return { error: "weapon not found" };
 
-      await tx.playerWeapon.updateMany({ where: { userId }, data: { equipedCharacter: 0 } });
+      await tx.playerWeapon.updateMany({
+        where: { userId, equipedCharacter: characterKey },
+        data: { equipedCharacter: 0 },
+      });
       const equipped = await tx.playerWeapon.update({
         where: { id: playerWeaponId },
         data: { equipedCharacter: characterKey },
