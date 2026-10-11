@@ -744,16 +744,40 @@ app.post("/api/armor/equip", async (req, res, next) => {
   try {
     const userId = Number(req.body?.userId);
     const characterKey = Number(req.body?.characterKey);
+    const armorType = String(req.body?.type ?? "");
     const playerArmorId = Number(req.body?.id);
     if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: "valid userId required" });
     if (!Number.isInteger(characterKey) || characterKey <= 0) return res.status(400).json({ error: "valid characterKey required" });
-    if (!Number.isInteger(playerArmorId) || playerArmorId <= 0) return res.status(400).json({ error: "valid armor id required" });
+    if (!["Hat", "Clothes", "Gloves", "Shoes"].includes(armorType)) return res.status(400).json({ error: "valid armor type required" });
+    if (!Number.isInteger(playerArmorId) || (playerArmorId !== -1 && playerArmorId <= 0)) return res.status(400).json({ error: "valid armor id required" });
 
     const result = await prisma.$transaction(async (tx) => {
       const character = await tx.playerCharacter.findUnique({
         where: { userId_characterKey: { userId, characterKey } },
       });
       if (!character) return { error: "character not found" };
+
+      if (playerArmorId === -1) {
+        const equippedArmors = await tx.playerArmor.findMany({
+          where: { userId, equipedCharacter: characterKey },
+          orderBy: { id: "asc" },
+        });
+        let equippedArmor = null;
+        for (const armor of equippedArmors) {
+          const data = await tx.armor.findUnique({ where: { key: armor.armorKey }, select: { type: true } });
+          if (data?.type === armorType) {
+            equippedArmor = armor;
+            break;
+          }
+        }
+        if (!equippedArmor) return { error: "equipped armor not found" };
+        const released = await tx.playerArmor.update({
+          where: { id: equippedArmor.id },
+          data: { equipedCharacter: 0 },
+          select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
+        });
+        return { equipped: null, released };
+      }
 
       const playerArmor = await tx.playerArmor.findFirst({
         where: { id: playerArmorId, userId },
@@ -765,6 +789,7 @@ app.post("/api/armor/equip", async (req, res, next) => {
         select: { type: true },
       });
       if (!armorData) return { error: "armor data not found" };
+      if (armorData.type !== armorType) return { error: "armor type mismatch" };
 
       const ownedArmors = await tx.playerArmor.findMany({
         where: { userId, equipedCharacter: characterKey },
@@ -797,31 +822,15 @@ app.post("/api/armor/equip", async (req, res, next) => {
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
-    audit(req, "ARMOR_EQUIPPED", {
-      userId, playerArmorId, characterKey, armorKey: result.equipped.armorKey,
+    audit(req, result.equipped ? "ARMOR_EQUIPPED" : "ARMOR_RELEASED", {
+      userId, playerArmorId, characterKey, armorType,
+      armorKey: result.equipped?.armorKey ?? result.released.armorKey,
       releasedId: result.released?.id ?? null,
     });
     return res.json(result);
   } catch (error) {
     return next(error);
   }
-});
-
-app.post("/api/armor/release", async (req, res, next) => {
-  try {
-    const userId = Number(req.body?.userId);
-    const playerArmorId = Number(req.body?.id);
-    if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: "valid userId required" });
-    if (!Number.isInteger(playerArmorId) || playerArmorId <= 0) return res.status(400).json({ error: "valid armor id required" });
-    const armor = await prisma.playerArmor.findFirst({ where: { id: playerArmorId, userId } });
-    if (!armor) return res.status(400).json({ error: "armor not found" });
-    const released = await prisma.playerArmor.update({
-      where: { id: playerArmorId }, data: { equipedCharacter: 0 },
-      select: { id: true, userId: true, armorKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
-    });
-    audit(req, "ARMOR_RELEASED", { userId, playerArmorId, armorKey: released.armorKey });
-    return res.json({ equipped: null, released });
-  } catch (error) { return next(error); }
 });
 
 app.post("/api/weapon/list", async (req, res, next) => {
@@ -851,13 +860,27 @@ app.post("/api/weapon/equip", async (req, res, next) => {
     const playerWeaponId = Number(req.body?.id);
     if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: "valid userId required" });
     if (!Number.isInteger(characterKey) || characterKey <= 0) return res.status(400).json({ error: "valid characterKey required" });
-    if (!Number.isInteger(playerWeaponId) || playerWeaponId <= 0) return res.status(400).json({ error: "valid weapon id required" });
+    if (!Number.isInteger(playerWeaponId) || (playerWeaponId !== -1 && playerWeaponId <= 0)) return res.status(400).json({ error: "valid weapon id required" });
 
     const result = await prisma.$transaction(async (tx) => {
       const character = await tx.playerCharacter.findUnique({
         where: { userId_characterKey: { userId, characterKey } },
       });
       if (!character) return { error: "character not found" };
+
+      if (playerWeaponId === -1) {
+        const equippedWeapon = await tx.playerWeapon.findFirst({
+          where: { userId, equipedCharacter: characterKey },
+          orderBy: { id: "asc" },
+        });
+        if (!equippedWeapon) return { error: "equipped weapon not found" };
+        const released = await tx.playerWeapon.update({
+          where: { id: equippedWeapon.id },
+          data: { equipedCharacter: 0 },
+          select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
+        });
+        return { equipped: null, released };
+      }
 
       const playerWeapon = await tx.playerWeapon.findFirst({ where: { id: playerWeaponId, userId } });
       if (!playerWeapon) return { error: "weapon not found" };
@@ -887,31 +910,15 @@ app.post("/api/weapon/equip", async (req, res, next) => {
     });
 
     if (result.error) return res.status(400).json({ error: result.error });
-    audit(req, "WEAPON_EQUIPPED", {
-      userId, playerWeaponId, characterKey, weaponKey: result.equipped.weaponKey,
+    audit(req, result.equipped ? "WEAPON_EQUIPPED" : "WEAPON_RELEASED", {
+      userId, playerWeaponId, characterKey,
+      weaponKey: result.equipped?.weaponKey ?? result.released.weaponKey,
       releasedId: result.released?.id ?? null,
     });
     return res.json(result);
   } catch (error) {
     return next(error);
   }
-});
-
-app.post("/api/weapon/release", async (req, res, next) => {
-  try {
-    const userId = Number(req.body?.userId);
-    const playerWeaponId = Number(req.body?.id);
-    if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: "valid userId required" });
-    if (!Number.isInteger(playerWeaponId) || playerWeaponId <= 0) return res.status(400).json({ error: "valid weapon id required" });
-    const weapon = await prisma.playerWeapon.findFirst({ where: { id: playerWeaponId, userId } });
-    if (!weapon) return res.status(400).json({ error: "weapon not found" });
-    const released = await prisma.playerWeapon.update({
-      where: { id: playerWeaponId }, data: { equipedCharacter: 0 },
-      select: { id: true, userId: true, weaponKey: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
-    });
-    audit(req, "WEAPON_RELEASED", { userId, playerWeaponId, weaponKey: released.weaponKey });
-    return res.json({ equipped: null, released });
-  } catch (error) { return next(error); }
 });
 
 app.post("/api/item/consume", async (req, res, next) => {
