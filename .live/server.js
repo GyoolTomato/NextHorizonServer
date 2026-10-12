@@ -1156,7 +1156,7 @@ app.post("/api/character/level-up", async (req, res, next) => {
     const result = await prisma.$transaction(async (tx) => {
       const [commonValues, levelRows, itemRows] = await Promise.all([
         tx.$queryRawUnsafe(
-          'SELECT "key", "value" FROM "_100_CommonValues" WHERE "key" IN (1000001, 1000002)'
+          'SELECT "key", "value_int" FROM "_100_CommonValues" WHERE "key" IN (1000001, 1000002)'
         ),
         tx.$queryRawUnsafe(
           'SELECT "level", "expToNextLevel", "totalExpRequired" FROM "_107_CharacterLevel" ORDER BY "level" ASC'
@@ -1166,7 +1166,7 @@ app.post("/api/character/level-up", async (req, res, next) => {
         ),
       ]);
 
-      const commonValueMap = new Map(commonValues.map((row) => [Number(row.key), Number(row.value)]));
+      const commonValueMap = new Map(commonValues.map((row) => [Number(row.key), Number(row.value_int)]));
       const maxLevel = commonValueMap.get(1000001);
       const expPerCard = commonValueMap.get(1000002);
       if (!Number.isSafeInteger(maxLevel) || maxLevel <= 0) {
