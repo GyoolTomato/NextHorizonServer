@@ -118,6 +118,12 @@ app.use(async (req, res, next) => {
 
 const PLAYER_EXP_ITEM_KEY = 1010003;
 const REINFORCEMENT_CARD_ITEM_KEY = 1010005;
+const INITIAL_ITEM_QUANTITIES = Object.freeze({
+  1010001: 12000,
+  1010002: 300000,
+  1010004: 1000,
+  1010005: 2000,
+});
 const missions = require("./missions");
 const { addPlayerArmor, addPlayerWeapon, grantInitialEquipment } = require("./equipment");
 
@@ -152,6 +158,19 @@ function toUserDto(user) {
     missions: user.missions || [],
     stageClears: user.stageClears || [],
   };
+}
+
+function getInitialItemGrants(itemRows) {
+  const availableKeys = new Set(itemRows.map((row) => Number(row.key)));
+  const grants = Object.entries(INITIAL_ITEM_QUANTITIES).map(([itemKey, quantity]) => ({
+    itemKey: Number(itemKey),
+    quantity,
+  }));
+  const missingKeys = grants.filter((grant) => !availableKeys.has(grant.itemKey)).map((grant) => grant.itemKey);
+  if (missingKeys.length > 0) {
+    throw new Error(`_101_Items missing initial item keys: ${missingKeys.join(", ")}`);
+  }
+  return grants;
 }
 
 function validateIntroduction(value) {
@@ -426,7 +445,7 @@ app.post("/api/auth/firebase/create", async (req, res, next) => {
     const user = await prisma.$transaction(async (tx) => {
       const uid = await createNextUid(tx);
       const rows = await tx.$queryRawUnsafe('SELECT "key" FROM "_101_Items" ORDER BY "key" ASC');
-      const itemKeys = rows.map(row => Number(row.key)).filter(key => key !== PLAYER_EXP_ITEM_KEY);
+      const itemGrants = getInitialItemGrants(rows);
       const created = await tx.user.create({
         data: {
           uid, localId: null, firebaseUid, nickname: nicknameResult.nickname,
@@ -435,14 +454,16 @@ app.post("/api/auth/firebase/create", async (req, res, next) => {
             { characterKey: 1020002, stack: 1 },
             { characterKey: 1020003, stack: 1 },
           ] },
-          items: { create: itemKeys.map(itemKey => ({ itemKey, quantity: 100 })) },
+          items: { create: itemGrants },
         },
       });
       await grantInitialEquipment(tx, created.id);
       await grantPlayerExperience(tx, created.id, 100);
       const now = new Date();
       await missions.recordLogin(tx, created.id, now);
-      for (const itemKey of itemKeys) await missions.recordItemAcquired(tx, created.id, itemKey, 100, now);
+      for (const grant of itemGrants) {
+        await missions.recordItemAcquired(tx, created.id, grant.itemKey, grant.quantity, now);
+      }
       return tx.user.findUnique({ where: { id: created.id } });
     });
     const playerData = await getPlayerData(user.id);
@@ -496,12 +517,7 @@ app.post("/api/user", async (req, res, next) => {
       const itemRows = await tx.$queryRawUnsafe(
         'SELECT "key" FROM "_101_Items" ORDER BY "key" ASC'
       );
-      const itemKeys = itemRows
-        .map((item) => Number(item.key))
-        .filter((itemKey) => itemKey !== PLAYER_EXP_ITEM_KEY);
-      if (itemKeys.length === 0 || itemKeys.some((itemKey) => !Number.isSafeInteger(itemKey))) {
-        throw new Error("_101_Items contains no valid item keys");
-      }
+      const itemGrants = getInitialItemGrants(itemRows);
 
       const createdUser = await tx.user.create({
         data: {
@@ -517,7 +533,7 @@ app.post("/api/user", async (req, res, next) => {
             ],
           },
           items: {
-            create: itemKeys.map((itemKey) => ({ itemKey, quantity: 100 })),
+            create: itemGrants,
           },
         },
         include: { characters: true, items: true },
@@ -526,8 +542,8 @@ app.post("/api/user", async (req, res, next) => {
       await grantPlayerExperience(tx, createdUser.id, 100);
       const missionNow = new Date();
       await missions.recordLogin(tx, createdUser.id, missionNow);
-      for (const itemKey of itemKeys) {
-        await missions.recordItemAcquired(tx, createdUser.id, itemKey, 100, missionNow);
+      for (const grant of itemGrants) {
+        await missions.recordItemAcquired(tx, createdUser.id, grant.itemKey, grant.quantity, missionNow);
       }
       return tx.user.findUnique({
         where: { id: createdUser.id },
