@@ -117,6 +117,7 @@ app.use(async (req, res, next) => {
 });
 
 const PLAYER_EXP_ITEM_KEY = 1010003;
+const REINFORCEMENT_CARD_ITEM_KEY = 1010005;
 const missions = require("./missions");
 const { addPlayerArmor, addPlayerWeapon, grantInitialEquipment } = require("./equipment");
 
@@ -715,6 +716,108 @@ app.post("/api/item/list", async (req, res, next) => {
       orderBy: { itemKey: "asc" },
     });
     return res.json(items);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/equipment/level-up", async (req, res, next) => {
+  try {
+    const userId = Number(req.body?.userId);
+    const equipmentId = Number(req.body?.id);
+    const isArmor = req.body?.isArmor;
+    const eItemTypes = req.body?.eItemTypes;
+    const counts = req.body?.counts;
+    if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: "valid userId required" });
+    if (!Number.isInteger(equipmentId) || equipmentId <= 0) return res.status(400).json({ error: "valid equipment id required" });
+    if (typeof isArmor !== "boolean") return res.status(400).json({ error: "isArmor must be a boolean" });
+    if (!Array.isArray(eItemTypes) || !Array.isArray(counts) || eItemTypes.length === 0) {
+      return res.status(400).json({ error: "eItemTypes and counts arrays required" });
+    }
+    if (eItemTypes.length !== counts.length) return res.status(400).json({ error: "eItemTypes and counts length mismatch" });
+
+    const requestedItems = new Map();
+    for (let index = 0; index < eItemTypes.length; index += 1) {
+      const eItemType = Number(eItemTypes[index]);
+      const count = Number(counts[index]);
+      if (!Number.isSafeInteger(eItemType) || eItemType <= 0) return res.status(400).json({ error: `invalid eItemTypes[${index}]` });
+      if (!Number.isSafeInteger(count) || count <= 0) return res.status(400).json({ error: `invalid counts[${index}]` });
+      const totalCount = (requestedItems.get(eItemType) || 0) + count;
+      if (!Number.isSafeInteger(totalCount) || totalCount > 2147483647) return res.status(400).json({ error: `counts[${index}] is too large` });
+      requestedItems.set(eItemType, totalCount);
+    }
+
+    const config = isArmor
+      ? { modelName: "playerArmor", responseField: "armor", levelTable: "_112_ArmorLevel", maxLevelKey: 1000004, keyField: "armorKey" }
+      : { modelName: "playerWeapon", responseField: "weapon", levelTable: "_111_WeaponLevel", maxLevelKey: 1000003, keyField: "weaponKey" };
+
+    const result = await prisma.$transaction(async (tx) => {
+      const [commonValues, levelRows, itemRows, equipment] = await Promise.all([
+        tx.$queryRawUnsafe(`SELECT "key", "value_int" FROM "_100_CommonValues" WHERE "key" IN (${config.maxLevelKey}, 1000005)`),
+        tx.$queryRawUnsafe(`SELECT "level", "expToNextLevel", "totalExpRequired" FROM "${config.levelTable}" ORDER BY "level" ASC`),
+        tx.$queryRawUnsafe('SELECT "key", "type" FROM "_101_Items"'),
+        tx[config.modelName].findFirst({ where: { id: equipmentId, userId } }),
+      ]);
+      if (!equipment) return { error: `${config.responseField} not found` };
+
+      const commonValueMap = new Map(commonValues.map((row) => [Number(row.key), Number(row.value_int)]));
+      const maxLevel = commonValueMap.get(config.maxLevelKey);
+      const expPerCard = commonValueMap.get(1000005);
+      if (!Number.isSafeInteger(maxLevel) || maxLevel <= 0) throw new Error(`invalid ${config.responseField} max level table value`);
+      if (!Number.isSafeInteger(expPerCard) || expPerCard <= 0) throw new Error("invalid ReinforcementCard experience table value");
+
+      const levels = levelRows.map((row) => ({ level: Number(row.level), totalExpRequired: Number(row.totalExpRequired) }));
+      const levelMap = new Map(levels.map((row) => [row.level, row]));
+      const currentLevelRow = levelMap.get(equipment.level);
+      const maxLevelRow = levelMap.get(maxLevel);
+      if (!currentLevelRow) throw new Error(`${config.responseField} level is missing from ${config.levelTable}`);
+      if (!maxLevelRow) throw new Error(`${config.responseField} max level is missing from ${config.levelTable}`);
+      if (equipment.level >= maxLevel) return { error: `${config.responseField} is already max level` };
+
+      const enumTypeMap = new Map(itemRows.map((row) => [Number(row.key) % 10000, String(row.type)]));
+      const itemTypeMap = new Map(itemRows.map((row) => [String(row.type), Number(row.key)]));
+      const consumptions = [];
+      let addedExp = 0;
+      for (const [eItemType, count] of requestedItems) {
+        const itemType = enumTypeMap.get(eItemType);
+        if (!itemType) return { error: `unknown EItemType: ${eItemType}` };
+        if (itemType !== "ReinforcementCard") return { error: `item type cannot grant equipment exp: ${itemType}` };
+        const itemKey = itemTypeMap.get(itemType);
+        if (itemKey !== REINFORCEMENT_CARD_ITEM_KEY) throw new Error(`invalid ReinforcementCard item key: ${itemKey}`);
+        const inventoryItem = await tx.playerItem.findUnique({ where: { userId_itemKey: { userId, itemKey } } });
+        if (!inventoryItem || inventoryItem.quantity < count) return { error: `not enough item: ${itemType}` };
+        consumptions.push({ eItemType, itemKey, count, inventoryItem });
+        addedExp += expPerCard * count;
+        if (!Number.isSafeInteger(addedExp)) return { error: "reinforcement experience is too large" };
+      }
+
+      const totalExp = currentLevelRow.totalExpRequired + equipment.exp + addedExp;
+      if (totalExp > maxLevelRow.totalExpRequired) return { error: "exp exceeds max level" };
+      let targetLevelRow = currentLevelRow;
+      for (const levelRow of levels) {
+        if (levelRow.level > maxLevel || levelRow.totalExpRequired > totalExp) break;
+        targetLevelRow = levelRow;
+      }
+      const updatedEquipment = await tx[config.modelName].update({
+        where: { id: equipment.id },
+        data: { level: targetLevelRow.level, exp: totalExp - targetLevelRow.totalExpRequired },
+        select: { id: true, userId: true, [config.keyField]: true, level: true, exp: true, subStat0: true, subStat1: true, equipedCharacter: true },
+      });
+      const updatedItems = [];
+      for (const consumption of consumptions) {
+        updatedItems.push(await tx.playerItem.update({
+          where: { id: consumption.inventoryItem.id },
+          data: { quantity: { decrement: consumption.count } },
+          select: { userId: true, itemKey: true, quantity: true },
+        }));
+      }
+      return { value: { isArmor, [config.responseField]: updatedEquipment, items: updatedItems }, addedExp, consumptions };
+    });
+
+    if (result.error) return res.status(400).json({ error: result.error });
+    const equipment = result.value[config.responseField];
+    audit(req, "EQUIPMENT_LEVEL_UP", { userId, equipmentId, isArmor, addedExp: result.addedExp, level: equipment.level, exp: equipment.exp });
+    return res.json(result.value);
   } catch (error) {
     return next(error);
   }
