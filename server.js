@@ -1610,7 +1610,7 @@ app.post("/api/stage/clear", async (req, res, next) => {
           clearCount: { increment: 1 },
         },
       });
-      return { starCount, rewards: itemRewards, armors, weapons };
+      return { stageKey, starCount, rewards: itemRewards, armors, weapons };
     });
 
     audit(req, "STAGE_REWARDS_GRANTED", {
