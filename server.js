@@ -148,6 +148,17 @@ function toPlayerInfoDto(user) {
   };
 }
 
+function toStageClearDto(stageClear) {
+  const starCount = stageClear.isCond3
+    ? 3
+    : stageClear.isCond2 ? 2 : stageClear.isCond1 ? 1 : 0;
+
+  return {
+    stageKey: stageClear.stageKey,
+    starCount,
+  };
+}
+
 function toUserDto(user) {
   return {
     playerInfo: toPlayerInfoDto(user),
@@ -156,7 +167,7 @@ function toUserDto(user) {
     armors: user.armors || [],
     weapons: user.weapons || [],
     missions: user.missions || [],
-    stageClears: user.stageClears || [],
+    stageClears: (user.stageClears || []).map(toStageClearDto),
   };
 }
 
