@@ -1447,27 +1447,37 @@ app.post("/api/stage/clear", async (req, res, next) => {
   try {
     const userId = Number(req.body?.userId);
     const stageKey = Number(req.body?.stageKey);
-    const clearTime = Number(req.body?.clearTime);
+    const remainingTime = Number(req.body?.remainingTime);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
       return res.status(400).json({ error: "valid userId required" });
     }
     if (!Number.isSafeInteger(stageKey) || stageKey <= 0) {
       return res.status(400).json({ error: "valid stageKey required" });
     }
-    if (!Number.isFinite(clearTime) || clearTime < 0) {
-      return res.status(400).json({ error: "clearTime must be a non-negative number" });
+    if (!Number.isSafeInteger(remainingTime) || remainingTime < 0) {
+      return res.status(400).json({ error: "remainingTime must be a non-negative integer" });
     }
     const result = await prisma.$transaction(async (tx) => {
       const stageRows = await tx.$queryRawUnsafe(
-        'SELECT "armorGroup", "weaponGroup" FROM "_700_StageList" WHERE "key" = ? LIMIT 1',
+        'SELECT "crystalCount", "goldCount", "armorGroup", "weaponGroup" ' +
+        'FROM "_700_StageList" WHERE "key" = ? LIMIT 1',
         stageKey
       );
       if (stageRows.length === 0) {
         throw Object.assign(new Error("stageKey not found in _700_StageList"), { statusCode: 400 });
       }
 
-      const armorGroupKey = Number(stageRows[0].armorGroup);
-      const weaponGroupKey = Number(stageRows[0].weaponGroup);
+      const stage = stageRows[0];
+      const crystalCount = Number(stage.crystalCount);
+      const goldCount = Number(stage.goldCount);
+      const armorGroupKey = Number(stage.armorGroup);
+      const weaponGroupKey = Number(stage.weaponGroup);
+      if (!Number.isSafeInteger(crystalCount) || crystalCount < 0) {
+        throw Object.assign(new Error("invalid crystalCount in _700_StageList"), { statusCode: 400 });
+      }
+      if (!Number.isSafeInteger(goldCount) || goldCount < 0) {
+        throw Object.assign(new Error("invalid goldCount in _700_StageList"), { statusCode: 400 });
+      }
       if (!Number.isSafeInteger(armorGroupKey) || armorGroupKey <= 0) {
         throw Object.assign(new Error("invalid armorGroup in _700_StageList"), { statusCode: 400 });
       }
@@ -1521,6 +1531,56 @@ app.post("/api/stage/clear", async (req, res, next) => {
       await validateEquipmentKeys("_105_Armors", armorKeys);
       await validateEquipmentKeys("_106_Weapons", weaponKeys);
 
+      const timeRows = await tx.$queryRawUnsafe(
+        'SELECT "key", "value_int" FROM "_100_CommonValues" WHERE "key" IN (?, ?)',
+        1000013,
+        1000014
+      );
+      const times = new Map(timeRows.map(row => [Number(row.key), Number(row.value_int)]));
+      const fastClearTime = times.get(1000013);
+      const veryFastClearTime = times.get(1000014);
+      if (!Number.isSafeInteger(fastClearTime) || fastClearTime < 0) {
+        throw Object.assign(new Error("invalid 1000013 value_int in _100_CommonValues"), { statusCode: 500 });
+      }
+      if (!Number.isSafeInteger(veryFastClearTime) || veryFastClearTime < fastClearTime) {
+        throw Object.assign(new Error("invalid 1000014 value_int in _100_CommonValues"), { statusCode: 500 });
+      }
+      const starCount = remainingTime >= veryFastClearTime
+        ? 3
+        : remainingTime >= fastClearTime ? 2 : 1;
+
+      const itemRewards = [
+        { itemKey: 1010001, quantity: crystalCount },
+        { itemKey: 1010002, quantity: goldCount },
+      ].filter(reward => reward.quantity > 0);
+      if (itemRewards.length > 0) {
+        const itemRows = await tx.$queryRawUnsafe(
+          'SELECT "key" FROM "_101_Items" WHERE "key" IN (?, ?)',
+          1010001,
+          1010002
+        );
+        const itemKeys = new Set(itemRows.map(row => Number(row.key)));
+        const missingItemKeys = itemRewards
+          .map(reward => reward.itemKey)
+          .filter(itemKey => !itemKeys.has(itemKey));
+        if (missingItemKeys.length > 0) {
+          throw new Error(`stage reward item keys missing in _101_Items: ${missingItemKeys.join(", ")}`);
+        }
+      }
+
+      for (const reward of itemRewards) {
+        const where = { userId_itemKey: { userId, itemKey: reward.itemKey } };
+        const current = await tx.playerItem.findUnique({ where, select: { quantity: true } });
+        if ((current?.quantity || 0) > 2147483647 - reward.quantity) {
+          throw Object.assign(new Error(`stage reward item quantity overflow: ${reward.itemKey}`), { statusCode: 409 });
+        }
+        await tx.playerItem.upsert({
+          where,
+          create: { userId, itemKey: reward.itemKey, quantity: reward.quantity },
+          update: { quantity: { increment: reward.quantity } },
+        });
+      }
+
       const armors = [];
       for (const armorKey of armorKeys) {
         armors.push(await addPlayerArmor(tx, {
@@ -1535,16 +1595,30 @@ app.post("/api/stage/clear", async (req, res, next) => {
       }
       await tx.playerStageClear.upsert({
         where: { userId_stageKey: { userId, stageKey } },
-        create: { userId, stageKey, clearCount: 1 },
-        update: { clearCount: { increment: 1 } },
+        create: {
+          userId,
+          stageKey,
+          isCond1: true,
+          isCond2: starCount >= 2,
+          isCond3: starCount >= 3,
+          clearCount: 1,
+        },
+        update: {
+          isCond1: true,
+          ...(starCount >= 2 ? { isCond2: true } : {}),
+          ...(starCount >= 3 ? { isCond3: true } : {}),
+          clearCount: { increment: 1 },
+        },
       });
-      return { success: true, armors, weapons };
+      return { starCount, rewards: itemRewards, armors, weapons };
     });
 
     audit(req, "STAGE_REWARDS_GRANTED", {
       userId,
       stageKey,
-      clearTime,
+      remainingTime,
+      starCount: result.starCount,
+      rewards: result.rewards,
       armorCount: result.armors.length,
       weaponCount: result.weapons.length,
     });
