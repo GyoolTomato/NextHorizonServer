@@ -26,7 +26,7 @@ model User {
   exp          BigInt            @default(0)
   progressExp  BigInt            @default(0)
   lifetimeExp  BigInt            @default(0)
-  portrait     String            @default("Utc")
+  portrait     String            @default("1020001")
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   memo         String            @default("")

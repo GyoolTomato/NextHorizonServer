@@ -459,7 +459,7 @@ app.post("/api/auth/firebase/create", async (req, res, next) => {
       const itemGrants = getInitialItemGrants(rows);
       const created = await tx.user.create({
         data: {
-          uid, localId: null, firebaseUid, nickname: nicknameResult.nickname,
+          uid, localId: null, firebaseUid, nickname: nicknameResult.nickname, portrait: "1020001",
           characters: { create: [
             { characterKey: 1020001, stack: 1 },
             { characterKey: 1020002, stack: 1 },
@@ -536,6 +536,7 @@ app.post("/api/user", async (req, res, next) => {
           uid,
           firebaseUid: null,
           nickname: nicknameResult.nickname,
+          portrait: "1020001",
           characters: {
             create: [
               { characterKey: 1020001, stack: 1 },
@@ -1687,13 +1688,13 @@ async function applyPlayerProfileSchemaMigration() {
       schemaChanged = true;
     }
     if (!columnNames.has("portrait")) {
-      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "portrait" TEXT NOT NULL DEFAULT \'Utc\'');
+      await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "portrait" TEXT NOT NULL DEFAULT \'1020001\'');
       schemaChanged = true;
     } else {
       await tx.$executeRawUnsafe(
         'UPDATE "User" SET "portrait" = COALESCE(' +
         '(SELECT "model" FROM "_102_Character" WHERE "key" = CAST("User"."portrait" AS INTEGER)), ' +
-        'CAST("portrait" AS TEXT), \'Utc\') WHERE typeof("portrait") != \'text\''
+        'CAST("portrait" AS TEXT), \'1020001\') WHERE typeof("portrait") != \'text\''
       );
     }
     if (!columnNames.has("memo")) {
